@@ -160,9 +160,7 @@ private func realBackspace() -> (down: CGEvent, up: CGEvent)? {
 
 /// A simulated Delete key-down, built the way SystemKeyboard builds one.
 private func simulatedDeleteDown() -> CGEvent? {
-    let event = CGEvent(keyboardEventSource: CGEventSource(stateID: .hidSystemState), virtualKey: CGKeyCode(deleteKeyCode), keyDown: true)
-    event?.flags = []
-    return event
+    KeyEvents.delete(source: CGEventSource(stateID: .hidSystemState))?.first
 }
 
 private func describe(_ event: CGEvent) -> [(String, String)] {
@@ -239,7 +237,14 @@ func runEchoTest(kittyFlags: Int?) -> Int32 {
     }
     text("text, 1st time")
     text("text, 2nd time")
-    probe("simulated Delete", sent: "delete x3", watching: watching) { SystemKeyboard(delay: slow, delete: .key).backspace(3) }
+    probe("simulated Delete, before fix", sent: "delete x3", watching: watching) { SystemKeyboard(delay: slow, delete: .key).backspace(3) }
+    probe("simulated Delete, fixed", sent: "delete x3", watching: watching) { SystemKeyboard(delay: slow).backspace(3) }
+    probe("abc, delete x3, d, fixed", sent: "abc del x3 d", watching: watching) {
+        let keyboard = SystemKeyboard(delay: fast)
+        keyboard.type("abc")
+        keyboard.backspace(3)
+        keyboard.type("d")
+    }
     if let real {
         probe("your Backspace, replayed", sent: "delete x3", watching: watching) { replay(real, times: 3) }
         probe("simulated, your flags", sent: "delete x3", watching: watching) {
