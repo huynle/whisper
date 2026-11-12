@@ -13,9 +13,10 @@ let scenario = [
 ]
 
 let usage = """
-    usage: keyboard-prototype [--check] [--dry-run] [--countdown <seconds>] [--pause-ms <ms>] [--delay-ms <ms>]
+    usage: keyboard-prototype [--check] [--dry-run] [--echo-test] [--countdown <seconds>] [--pause-ms <ms>] [--delay-ms <ms>]
       --check       report whether Accessibility permission is granted, then exit
       --dry-run     print the key presses instead of sending them
+      --echo-test   type into this terminal pane and report which key presses arrive
       --countdown   seconds to focus the target field before typing starts (default 5)
       --pause-ms    wait between revisions (default 1200)
       --delay-ms    wait after each key press (default 2)
@@ -28,6 +29,7 @@ func fail(_ message: String) -> Never {
 
 var check = false
 var dryRun = false
+var echoTest = false
 var countdown = 5
 var pauseMs = 1200
 var delayMs = 2
@@ -41,6 +43,7 @@ while let argument = arguments.popFirst() {
     switch argument {
     case "--check": check = true
     case "--dry-run": dryRun = true
+    case "--echo-test": echoTest = true
     case "--countdown": countdown = number()
     case "--pause-ms": pauseMs = number()
     case "--delay-ms": delayMs = number()
@@ -74,6 +77,10 @@ guard trusted else {
         Grant it to the app this was launched from (your terminal) in
         System Settings > Privacy & Security > Accessibility, then run this again.
         """)
+}
+
+if echoTest {
+    exit(runEchoTest(scenario: scenario))
 }
 
 for remaining in stride(from: countdown, to: 0, by: -1) {
