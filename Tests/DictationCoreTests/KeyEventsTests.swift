@@ -17,9 +17,11 @@ import Testing
         #expect(events.allSatisfy { $0.flags == realKeyMark })
     }
 
-    @Test func textCarriesTheRealKeyMark() throws {
+    /// With the mark, iTerm2's kitty keyboard mode reports a release of the A key (the key text is sent on) after
+    /// every character; without it, text arrives as plain characters there, in plain iTerm2 and in Herdr.
+    @Test func textCarriesNoFlags() throws {
         let events = try #require(KeyEvents.text("~"))
-        #expect(events.allSatisfy { $0.flags == realKeyMark })
+        #expect(events.allSatisfy { $0.flags.isEmpty })
     }
 
     @Test func textCarriesItsCharacter() throws {
