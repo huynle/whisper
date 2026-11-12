@@ -7,7 +7,11 @@ import Foundation
 nonisolated(unsafe) private var savedTerminal = termios()
 nonisolated(unsafe) private var pushedKittyFlags = false
 nonisolated(unsafe) private var keysSeenBySystem: [Int64] = []
+/// While set, copies of Delete key events (down and up) passing through macOS are kept here.
+nonisolated(unsafe) private var capturingDelete = false
+nonisolated(unsafe) private var capturedDelete: [CGEvent] = []
 private let keysSeenLock = NSLock()
+private let deleteKeyCode: Int64 = 51
 
 private func restoreTerminal() {
     // The keyboard mode and bracketed paste off again, then the settings the shell had.
@@ -43,12 +47,14 @@ private func readKeysDirectly(kittyFlags: Int?) -> Bool {
 /// Watches key presses as they pass through macOS on their way to the focused app, without changing them.
 /// False when macOS does not allow it.
 private func watchSystemKeys() -> Bool {
-    let keyDown = CGEventMask(1 << CGEventType.keyDown.rawValue)
+    let keys = CGEventMask(1 << CGEventType.keyDown.rawValue) | CGEventMask(1 << CGEventType.keyUp.rawValue)
     guard let tap = CGEvent.tapCreate(
-        tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .defaultTap, eventsOfInterest: keyDown,
-        callback: { _, _, event, _ in
+        tap: .cgSessionEventTap, place: .tailAppendEventTap, options: .defaultTap, eventsOfInterest: keys,
+        callback: { _, type, event, _ in
+            let code = event.getIntegerValueField(.keyboardEventKeycode)
             keysSeenLock.lock()
-            keysSeenBySystem.append(event.getIntegerValueField(.keyboardEventKeycode))
+            if type == .keyDown { keysSeenBySystem.append(code) }
+            if capturingDelete, code == deleteKeyCode, let copy = event.copy() { capturedDelete.append(copy) }
             keysSeenLock.unlock()
             return Unmanaged.passUnretained(event)
         }, userInfo: nil)
@@ -117,9 +123,14 @@ private func probe(_ name: String, sent: String, watching: Bool, _ keys: () -> V
     print(column(name, 30) + column(sent, 14) + column(watching ? shown(keys: seen) : "n/a", 12) + column(shown(bytes), 24) + timing + stray)
 }
 
-/// Asks the user to press Backspace once, so its real encoding can be compared with the simulated one.
-private func realBackspace() {
+/// Asks the user to press Backspace once. Returns copies of its key-down and key-up as macOS saw them.
+private func realBackspace() -> (down: CGEvent, up: CGEvent)? {
     _ = arrived()
+    keysSeenLock.lock()
+    capturedDelete.removeAll()
+    capturingDelete = true
+    keysSeenLock.unlock()
+
     print("\nPress Backspace once now (you have 6 seconds).")
     let start = Date()
     var bytes: [UInt8] = []
@@ -134,7 +145,76 @@ private func realBackspace() {
         if let lastAt, Date().timeIntervalSince(lastAt) > 0.4 { break }
         Thread.sleep(forTimeInterval: 0.005)
     }
+
+    keysSeenLock.lock()
+    capturingDelete = false
+    let events = capturedDelete
+    keysSeenLock.unlock()
     print("Your Backspace arrived as: \(shown(bytes))")
+    guard let down = events.first(where: { $0.type == .keyDown }), let up = events.first(where: { $0.type == .keyUp }) else {
+        print("macOS did not show its key-down and key-up, so it cannot be compared or replayed.")
+        return nil
+    }
+    return (down, up)
+}
+
+/// A simulated Delete key-down, built the way SystemKeyboard builds one.
+private func simulatedDeleteDown() -> CGEvent? {
+    let event = CGEvent(keyboardEventSource: CGEventSource(stateID: .hidSystemState), virtualKey: CGKeyCode(deleteKeyCode), keyDown: true)
+    event?.flags = []
+    return event
+}
+
+private func describe(_ event: CGEvent) -> [(String, String)] {
+    var length = 0
+    var units = [UniChar](repeating: 0, count: 8)
+    event.keyboardGetUnicodeString(maxStringLength: units.count, actualStringLength: &length, unicodeString: &units)
+    let text = units.prefix(length).map { String(format: "%04x", $0) }.joined(separator: " ")
+    return [
+        ("flags", String(format: "0x%llx", event.flags.rawValue)),
+        ("keyboard type", "\(event.getIntegerValueField(.keyboardEventKeyboardType))"),
+        ("key code", "\(event.getIntegerValueField(.keyboardEventKeycode))"),
+        ("autorepeat", "\(event.getIntegerValueField(.keyboardEventAutorepeat))"),
+        ("characters", text.isEmpty ? "none" : text),
+        ("source state", "\(event.getIntegerValueField(.eventSourceStateID))"),
+        ("source user data", "\(event.getIntegerValueField(.eventSourceUserData))"),
+        ("source process", "\(event.getIntegerValueField(.eventSourceUnixProcessID))"),
+    ]
+}
+
+private func compare(real: CGEvent) {
+    guard let simulated = simulatedDeleteDown() else { return }
+    print("\nDelete key-down as macOS sees it:")
+    print(column("field", 20) + column("your Backspace", 22) + "simulated")
+    for ((name, mine), (_, theirs)) in zip(describe(real), describe(simulated)) {
+        print(column(name, 20) + column(mine, 22) + theirs + (mine == theirs ? "" : "   <- differs"))
+    }
+}
+
+/// Posts copies of the user's real key-down and key-up.
+private func replay(_ real: (down: CGEvent, up: CGEvent), times: Int) {
+    for _ in 0..<times {
+        for event in [real.down, real.up] {
+            event.copy()?.post(tap: .cghidEventTap)
+        }
+        Thread.sleep(forTimeInterval: 0.03)
+    }
+}
+
+/// Posts simulated Deletes that take some fields from the user's real one.
+private func simulatedDeletes(times: Int, like real: CGEvent, flags: Bool, keyboardType: Bool) {
+    let source = CGEventSource(stateID: .hidSystemState)
+    for _ in 0..<times {
+        for down in [true, false] {
+            guard let event = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(deleteKeyCode), keyDown: down) else { continue }
+            event.flags = flags ? real.flags : []
+            if keyboardType {
+                event.setIntegerValueField(.keyboardEventKeyboardType, value: real.getIntegerValueField(.keyboardEventKeyboardType))
+            }
+            event.post(tap: .cghidEventTap)
+        }
+        Thread.sleep(forTimeInterval: 0.03)
+    }
 }
 
 func runEchoTest(kittyFlags: Int?) -> Int32 {
@@ -146,9 +226,9 @@ func runEchoTest(kittyFlags: Int?) -> Int32 {
 
     let watching = watchSystemKeys()
     print(kittyFlags.map { "Kitty keyboard mode on, flags \($0)." } ?? "Kitty keyboard mode off.")
-    realBackspace()
-    print("\nNow keep this pane focused and do not touch the keyboard or mouse (about 25 seconds).")
-    if !watching { print("macOS did not allow watching key presses, so the \"macOS saw\" column is n/a.") }
+    let real = realBackspace()
+    if let real { compare(real: real.down) }
+    print("\nNow keep this pane focused and do not touch the keyboard or mouse (about 20 seconds).")
     Thread.sleep(forTimeInterval: 3)
 
     print("\n" + column("batch", 30) + column("sent", 14) + column("macOS saw", 12) + column("pane received", 24) + "when")
@@ -157,25 +237,21 @@ func runEchoTest(kittyFlags: Int?) -> Int32 {
     func text(_ name: String) {
         probe(name, sent: "abc", watching: watching) { SystemKeyboard(delay: fast).type("abc") }
     }
-    func deletes(_ method: DeleteMethod) {
-        probe(method.rawValue, sent: "delete x3", watching: watching) { SystemKeyboard(delay: slow, delete: method).backspace(3) }
-    }
-    func mixed(_ name: String, _ method: DeleteMethod, delay: TimeInterval) {
-        probe(name, sent: "abc del x3 d", watching: watching) {
-            let keyboard = SystemKeyboard(delay: delay, delete: method)
-            keyboard.type("abc")
-            keyboard.backspace(3)
-            keyboard.type("d")
-        }
-    }
-
     text("text, 1st time")
     text("text, 2nd time")
-    for method in DeleteMethod.allCases { deletes(method) }
-    text("text after deletes")
-    mixed("mixed, fast", .keyModifiersLeft, delay: fast)
-    mixed("mixed, slow", .keyModifiersLeft, delay: slow)
-    mixed("mixed, delete held", .keyHeld, delay: slow)
+    probe("simulated Delete", sent: "delete x3", watching: watching) { SystemKeyboard(delay: slow, delete: .key).backspace(3) }
+    if let real {
+        probe("your Backspace, replayed", sent: "delete x3", watching: watching) { replay(real, times: 3) }
+        probe("simulated, your flags", sent: "delete x3", watching: watching) {
+            simulatedDeletes(times: 3, like: real.down, flags: true, keyboardType: false)
+        }
+        probe("simulated, your kbd type", sent: "delete x3", watching: watching) {
+            simulatedDeletes(times: 3, like: real.down, flags: false, keyboardType: true)
+        }
+        probe("simulated, both", sent: "delete x3", watching: watching) {
+            simulatedDeletes(times: 3, like: real.down, flags: true, keyboardType: true)
+        }
+    }
     text("text, last time")
 
     print("\nt = text key, D = Delete key. A working delete shows as <7f> in \"pane received\".")
