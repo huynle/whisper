@@ -6,6 +6,7 @@ let package = Package(
     platforms: [.macOS(.v14)],
     targets: [
         .target(name: "DictationCore"),
+        .executableTarget(name: "keyboard-prototype", dependencies: ["DictationCore"], path: "Sources/KeyboardPrototype"),
         .testTarget(name: "DictationCoreTests", dependencies: ["DictationCore"]),
     ]
 )
