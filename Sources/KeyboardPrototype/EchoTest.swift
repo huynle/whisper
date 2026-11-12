@@ -5,18 +5,21 @@ import DictationCore
 import Foundation
 
 nonisolated(unsafe) private var savedTerminal = termios()
+nonisolated(unsafe) private var pushedKittyFlags = false
 nonisolated(unsafe) private var keysSeenBySystem: [Int64] = []
 private let keysSeenLock = NSLock()
 
 private func restoreTerminal() {
-    // Bracketed paste off again, then the settings the shell had.
+    // The keyboard mode and bracketed paste off again, then the settings the shell had.
+    if pushedKittyFlags { FileHandle.standardOutput.write(Data("\u{1B}[<u".utf8)) }
     FileHandle.standardOutput.write(Data("\u{1B}[?2004l".utf8))
     tcsetattr(STDIN_FILENO, TCSAFLUSH, &savedTerminal)
 }
 
 /// Reads keys as they arrive (no line editing, no echo), the way a shell prompt or an agent prompt does,
 /// with bracketed paste on as they have it.
-private func readKeysDirectly() -> Bool {
+/// `kittyFlags` switches the terminal into the kitty keyboard mode with those flags, as Herdr does.
+private func readKeysDirectly(kittyFlags: Int?) -> Bool {
     guard isatty(STDIN_FILENO) == 1, tcgetattr(STDIN_FILENO, &savedTerminal) == 0 else { return false }
     var direct = savedTerminal
     direct.c_lflag &= ~tcflag_t(ICANON | ECHO)
@@ -30,6 +33,10 @@ private func readKeysDirectly() -> Bool {
         exit(130)
     }
     FileHandle.standardOutput.write(Data("\u{1B}[?2004h".utf8))
+    if let kittyFlags {
+        FileHandle.standardOutput.write(Data("\u{1B}[>\(kittyFlags)u".utf8))
+        pushedKittyFlags = true
+    }
     return true
 }
 
@@ -110,15 +117,37 @@ private func probe(_ name: String, sent: String, watching: Bool, _ keys: () -> V
     print(column(name, 30) + column(sent, 14) + column(watching ? shown(keys: seen) : "n/a", 12) + column(shown(bytes), 24) + timing + stray)
 }
 
-func runEchoTest() -> Int32 {
-    guard readKeysDirectly() else {
+/// Asks the user to press Backspace once, so its real encoding can be compared with the simulated one.
+private func realBackspace() {
+    _ = arrived()
+    print("\nPress Backspace once now (you have 6 seconds).")
+    let start = Date()
+    var bytes: [UInt8] = []
+    var lastAt: Date?
+    while Date().timeIntervalSince(start) < 6 {
+        let chunk = arrived()
+        if !chunk.isEmpty {
+            bytes += chunk
+            lastAt = Date()
+        }
+        // Stop shortly after the key came up.
+        if let lastAt, Date().timeIntervalSince(lastAt) > 0.4 { break }
+        Thread.sleep(forTimeInterval: 0.005)
+    }
+    print("Your Backspace arrived as: \(shown(bytes))")
+}
+
+func runEchoTest(kittyFlags: Int?) -> Int32 {
+    guard readKeysDirectly(kittyFlags: kittyFlags) else {
         FileHandle.standardError.write(Data("--echo-test must run in a terminal pane.\n".utf8))
         return 2
     }
     defer { restoreTerminal() }
 
     let watching = watchSystemKeys()
-    print("Keep this pane focused and do not touch the keyboard or mouse (about 25 seconds).")
+    print(kittyFlags.map { "Kitty keyboard mode on, flags \($0)." } ?? "Kitty keyboard mode off.")
+    realBackspace()
+    print("\nNow keep this pane focused and do not touch the keyboard or mouse (about 25 seconds).")
     if !watching { print("macOS did not allow watching key presses, so the \"macOS saw\" column is n/a.") }
     Thread.sleep(forTimeInterval: 3)
 
