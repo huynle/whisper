@@ -80,7 +80,7 @@ guard trusted else {
 }
 
 if echoTest {
-    exit(runEchoTest(scenario: scenario))
+    exit(runEchoTest())
 }
 
 for remaining in stride(from: countdown, to: 0, by: -1) {
