@@ -38,7 +38,7 @@ The app lives in the menu bar with no Dock icon. The code is one Swift package w
 
 | Part | What it does |
 |---|---|
-| Hotkey listener | Detects hold-to-talk and double-tap-to-lock system-wide. Also sees the user's own key presses and clicks, which the revision safety rules need. |
+| Hotkey listener | Detects hold-to-talk and double-tap-to-lock system-wide, on user-defined bindings. Also sees the user's own key presses and clicks, which the revision safety rules need. |
 | Recorder | Captures the microphone as 16 kHz mono audio |
 | Speech detector | Finds speech, cuts it into segments at pauses, drops silence and noise |
 | Context reader | Finds the focused app and picks the profile |
@@ -284,7 +284,6 @@ Each step ends with something that can be tried.
 
 ## Not yet verified
 
-- Whether OmniRoute accepts the standard transcription request and which speech models it offers. Its model list returned 401 without a key.
 - Which speech models accept a vocabulary hint. Hub does not send one.
 - Which audio-capable chat models are available on the three providers for the one-step recipe.
 - Running the Silero and Smart Turn models from Swift. The loudness detector and the silence timers are the fallbacks.
@@ -297,8 +296,13 @@ Each step ends with something that can be tried.
 ## Open items
 
 - The app's name.
-- Which key is the hotkey.
 - Which host provides cloud Whisper.
+
+## Updates
+
+- **2026-11-12, hotkeys:** the user defines and binds their own hotkeys in settings, instead of a fixed key. Hold-to-talk and double-tap-to-lock apply to whatever is bound, so the listener must support a modifier key alone as well as key combinations.
+- **2026-11-12, OmniRoute verified:** it accepts the standard transcription request. Its speech models are routed through OpenRouter (Whisper variants, `gpt-4o-transcribe`, `gpt-4o-mini-transcribe`, Deepgram Nova-3, Voxtral, Parakeet and others). On one synthetic 4-second clip, `gpt-4o-mini-transcribe` wrote "cd ~/projects/whisper" directly, in about 1.2 s.
+- **2026-11-12, step 1 done:** the keyboard prototype works in iTerm under Herdr. Simulated Delete keys must carry the `maskNonCoalesced` flag, as real key presses do; without it iTerm's kitty keyboard mode, which Herdr turns on, drops them. Text keys must not carry it.
 
 ## Sources read
 
