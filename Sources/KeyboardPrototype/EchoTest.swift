@@ -71,9 +71,9 @@ private func shown(_ bytes: [UInt8]) -> String {
     bytes.isEmpty ? "nothing" : bytes.map { (0x20...0x7E).contains($0) ? String(UnicodeScalar($0)) : String(format: "<%02x>", $0) }.joined()
 }
 
-/// t = a text key, D = the Delete key, H = the H key (for Control-H), otherwise the key's number.
+/// t = a text key, D = the Delete key, otherwise the key's number.
 private func shown(keys: [Int64]) -> String {
-    keys.isEmpty ? "nothing" : keys.map { $0 == 0 ? "t" : $0 == 51 ? "D" : $0 == 4 ? "H" : "(\($0))" }.joined()
+    keys.isEmpty ? "nothing" : keys.map { $0 == 0 ? "t" : $0 == 51 ? "D" : "(\($0))" }.joined()
 }
 
 private func column(_ text: String, _ width: Int) -> String {
@@ -131,9 +131,9 @@ func runEchoTest() -> Int32 {
     func deletes(_ method: DeleteMethod) {
         probe(method.rawValue, sent: "delete x3", watching: watching) { SystemKeyboard(delay: slow, delete: method).backspace(3) }
     }
-    func mixed(_ name: String, delay: TimeInterval) {
+    func mixed(_ name: String, _ method: DeleteMethod, delay: TimeInterval) {
         probe(name, sent: "abc del x3 d", watching: watching) {
-            let keyboard = SystemKeyboard(delay: delay, delete: .keyModifiersLeft)
+            let keyboard = SystemKeyboard(delay: delay, delete: method)
             keyboard.type("abc")
             keyboard.backspace(3)
             keyboard.type("d")
@@ -142,17 +142,13 @@ func runEchoTest() -> Int32 {
 
     text("text, 1st time")
     text("text, 2nd time")
-    text("text, 3rd time")
-    deletes(.keyModifiersLeft)
+    for method in DeleteMethod.allCases { deletes(method) }
     text("text after deletes")
-    deletes(.key)
-    deletes(.delCharacter)
-    deletes(.controlH)
-    text("text after deletes")
-    mixed("text + deletes + text, fast", delay: fast)
-    mixed("text + deletes + text, slow", delay: slow)
+    mixed("mixed, fast", .keyModifiersLeft, delay: fast)
+    mixed("mixed, slow", .keyModifiersLeft, delay: slow)
+    mixed("mixed, delete held", .keyHeld, delay: slow)
     text("text, last time")
 
-    print("\nt = text key, D = Delete key, H = H key. A working delete shows as <7f> or <08> in \"pane received\".")
+    print("\nt = text key, D = Delete key. A working delete shows as <7f> in \"pane received\".")
     return 0
 }
