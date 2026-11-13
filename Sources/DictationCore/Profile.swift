@@ -210,3 +210,24 @@ public enum CleanupPrompt {
         words.map { "\"\($0)\"" }.joined(separator: ", ")
     }
 }
+
+/// What one dictation needs from the settings, taken when the hotkey is pressed.
+public struct DictationContext: Sendable {
+    public var profile: Profile
+    public var dictionary: UserDictionary
+    /// nil: no clean-up, the speech model's text is typed as it is.
+    public var cleaner: Cleaner?
+
+    public init(profile: Profile, dictionary: UserDictionary, cleaner: Cleaner?) {
+        self.profile = profile
+        self.dictionary = dictionary
+        self.cleaner = cleaner
+    }
+
+    /// No profile settings at all: the speech model's text, typed as it is.
+    public static var plain: DictationContext {
+        var profile = Profile.fallback
+        profile.trailingSpace = false
+        return DictationContext(profile: profile, dictionary: UserDictionary(entries: []), cleaner: nil)
+    }
+}
