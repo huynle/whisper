@@ -54,6 +54,11 @@ struct SettingsView: View {
                 }
                 Text("While ready, the next press records at once, and the macOS microphone indicator stays on.")
                     .font(.caption).foregroundStyle(.secondary)
+                Picker("Sound cues", selection: $settings.cueVolume) {
+                    ForEach(AppSettings.cueChoices, id: \.volume) { Text($0.label).tag($0.volume) }
+                }
+                Text("A blip when the microphone turns on, two rising when it locks, a lower one when it turns off, two falling when a press is cancelled, a low tone when a dictation fails.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Permissions") {

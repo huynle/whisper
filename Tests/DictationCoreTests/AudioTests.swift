@@ -1,3 +1,4 @@
+import AVFoundation
 import Foundation
 import Testing
 @testable import DictationCore
@@ -34,6 +35,18 @@ import Testing
         #expect(Int16(bitPattern: uint16(wav, 46)) == 32_767)
         #expect(Int16(bitPattern: uint16(wav, 48)) == -32_767)
         #expect(Int16(bitPattern: uint16(wav, 50)) == 16_384)
+    }
+
+    /// The cues are played from this format by NSSound, so macOS's own decoder must accept it.
+    @Test func macOSCanReadTheFile() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("wav-\(UUID().uuidString).wav")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let samples = Cue.locked.render(sampleRate: 44_100, volume: 0.15)
+        try WAV.encode(samples, sampleRate: 44_100).write(to: url)
+        let file = try AVAudioFile(forReading: url)
+        #expect(file.fileFormat.sampleRate == 44_100)
+        #expect(file.fileFormat.channelCount == 1)
+        #expect(file.length == AVAudioFramePosition(samples.count))
     }
 
     @Test func clipsSamplesOutsideTheRange() {

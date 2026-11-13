@@ -11,6 +11,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let log = DictationLog()
     private let gesture = HotkeyGesture()
     private let recorder = MicRecorder()
+    private let cues = CuePlayer()
 
     private var statusItem: NSStatusItem!
     private var listener: HotkeyListener?
@@ -36,12 +37,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             keyboard: TypingKeyboard(),
             now: { ProcessInfo.processInfo.systemUptime },
             onRecord: { [weak self] record in self?.recorded(record) })
-        session.onStatusChange = { [weak self] status in self?.show(status) }
+        session.onStatusChange = { [weak self] status in
+            self?.show(status)
+            if let cue = Cue.for(status) { self?.cues.play(cue) }
+        }
         show(.idle)
 
         settings.$binding.sink { [weak self] in self?.listener?.binding = $0 }.store(in: &subscriptions)
         settings.$capturingShortcut.sink { [weak self] in self?.listener?.paused = $0 }.store(in: &subscriptions)
         settings.$warmSeconds.sink { [weak self] in self?.recorder.warmSeconds = $0 }.store(in: &subscriptions)
+        settings.$cueVolume.sink { [weak self] in self?.cues.volume = $0 }.store(in: &subscriptions)
 
         requestPermissions()
         startListener()
@@ -60,7 +65,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func apply(_ actions: [GestureAction]) {
-        for action in actions { session.handle(action) }
+        // The microphone first, then the cue, so the cue never delays recording.
+        for action in actions {
+            session.handle(action)
+            cues.play(Cue.for(action))
+        }
         gestureTimer?.invalidate()
         gestureTimer = nil
         guard let deadline = gesture.deadline else { return }

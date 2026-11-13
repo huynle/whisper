@@ -24,6 +24,9 @@ final class AppSettings: ObservableObject {
         ("Off", 0), ("10 seconds", 10), ("1 minute", 60), ("5 minutes", 300), ("Always", .infinity),
     ]
 
+    /// Sound cue loudness (the loudest sample).
+    static let cueChoices: [(label: String, volume: Float)] = [("Off", 0), ("Quiet", 0.15), ("Normal", 0.35)]
+
     private let defaults = UserDefaults.standard
     private let transport = URLSessionTransport()
 
@@ -33,6 +36,7 @@ final class AppSettings: ObservableObject {
     @Published var language: String { didSet { defaults.set(language, forKey: "language") } }
     /// Stored as -1 for "always", because UserDefaults cannot hold infinity.
     @Published var warmSeconds: Double { didSet { defaults.set(warmSeconds.isInfinite ? -1 : warmSeconds, forKey: "warmSeconds") } }
+    @Published var cueVolume: Float { didSet { defaults.set(cueVolume, forKey: "cueVolume") } }
     /// True while Settings is recording a new shortcut, so the hotkey does not fire meanwhile.
     @Published var capturingShortcut = false
     @Published private(set) var hasAPIKey: Bool
@@ -46,6 +50,7 @@ final class AppSettings: ObservableObject {
         language = defaults.string(forKey: "language") ?? "en"
         let warm = defaults.object(forKey: "warmSeconds") as? Double ?? 60
         warmSeconds = warm < 0 ? .infinity : warm
+        cueVolume = defaults.object(forKey: "cueVolume") as? Float ?? 0.15
         apiKey = Keychain.read(account: Keychain.omniRoute)
         hasAPIKey = apiKey != nil
     }
