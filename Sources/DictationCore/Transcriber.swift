@@ -34,6 +34,8 @@ public enum TranscriptionError: Error, Equatable, CustomStringConvertible {
 }
 
 public protocol Transcriber: Sendable {
+    /// The model's name, for the dictation record.
+    var model: String { get }
     func transcribe(wav: Data) async throws -> String
 }
 
