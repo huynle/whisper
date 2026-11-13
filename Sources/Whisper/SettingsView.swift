@@ -66,7 +66,8 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 520)
+        // A grouped Form scrolls, so it reports no height of its own; without a fixed size the window collapses.
+        .frame(width: 520, height: 640)
         .onReceive(refresh) { _ in permissions = Permissions.current() }
         .onDisappear { stopCapture() }
     }

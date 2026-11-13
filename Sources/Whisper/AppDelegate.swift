@@ -3,6 +3,7 @@ import AVFoundation
 import Combine
 import DictationCore
 import SwiftUI
+import UniformTypeIdentifiers
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
@@ -44,7 +45,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         requestPermissions()
         startListener()
-        if !settings.hasAPIKey { openSettings() }
+        if !settings.hasAPIKey || CommandLine.arguments.contains("--open-settings") { openSettings() }
     }
 
     // MARK: hotkey to session
@@ -156,9 +157,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSPasteboard.general.setString(lastText, forType: .string)
     }
 
+    /// Opens the log in the default plain-text editor: macOS has no app for .jsonl files.
     @objc private func openLog() {
         if !FileManager.default.fileExists(atPath: log.url.path) { try? Data().write(to: log.url) }
-        NSWorkspace.shared.open(log.url)
+        let editor = NSWorkspace.shared.urlForApplication(toOpen: .plainText)
+            ?? URL(fileURLWithPath: "/System/Applications/TextEdit.app")
+        NSWorkspace.shared.open([log.url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
     }
 
     @objc private func openAccessibility() {
@@ -169,7 +173,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func openSettings() {
         if settingsWindow == nil {
-            let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(settings: settings)))
+            let hosting = NSHostingController(rootView: SettingsView(settings: settings))
+            hosting.sizingOptions = [.preferredContentSize]
+            let window = NSWindow(contentViewController: hosting)
             window.title = "Whisper Settings"
             window.styleMask = [.titled, .closable]
             window.isReleasedWhenClosed = false
