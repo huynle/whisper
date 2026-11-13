@@ -7,6 +7,8 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
     let model = "test-cleaner"
     private let lock = NSLock()
     private var waiting: [String: CheckedContinuation<String, Error>] = [:]
+    /// Answers given before their request arrived; delivered when it does, so no answer is ever lost.
+    private var early: [String: Result<String, Error>] = [:]
     private(set) var instructionsSeen: [String] = []
 
     var calls: Int { lock.withLock { waiting.count + answered } }
@@ -14,10 +16,13 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
 
     func clean(_ text: String, instructions: String) async throws -> Transcription {
         let cleaned: String = try await withCheckedThrowingContinuation { continuation in
-            lock.withLock {
+            let answer: Result<String, Error>? = lock.withLock {
                 instructionsSeen.append(instructions)
+                if let answer = early.removeValue(forKey: text) { return answer }
                 waiting[text] = continuation
+                return nil
             }
+            if let answer { continuation.resume(with: answer) }
         }
         return Transcription(text: cleaned, timing: RequestTiming(totalMs: 600))
     }
@@ -30,16 +35,18 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
     }
 
     func answer(_ text: String, with result: Result<String, Error>) {
-        let continuation = lock.withLock {
+        let continuation: CheckedContinuation<String, Error>? = lock.withLock {
             answered += 1
-            return waiting.removeValue(forKey: text)
+            if let continuation = waiting.removeValue(forKey: text) { return continuation }
+            early[text] = result
+            return nil
         }
         continuation?.resume(with: result)
     }
 }
 
 @MainActor
-@Suite struct ProfileSessionTests {
+@Suite(.timeLimit(.minutes(1))) struct ProfileSessionTests {
     let recorder = FakeRecorder()
     let transcriber = ManualTranscriber()
     let cleaner = ManualCleaner()

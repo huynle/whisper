@@ -231,3 +231,74 @@ public struct DictationContext: Sendable {
         return DictationContext(profile: profile, dictionary: UserDictionary(entries: []), cleaner: nil)
     }
 }
+
+/// Editing, as the Settings window does it. The last profile is the fallback for every other app and stays.
+extension ProfileSet {
+    /// Adds a profile with General's settings and no apps, just before General. Returns its index.
+    public mutating func addProfile() -> Int {
+        var profile = profiles.last ?? .fallback
+        profile.name = freeName("New profile")
+        profile.apps = []
+        profile.instructions = ""
+        return insertBeforeFallback(profile)
+    }
+
+    /// Adds a copy of the profile at `index`, without its apps (an app belongs to one profile). Returns its index.
+    public mutating func duplicateProfile(at index: Int) -> Int {
+        var profile = profiles[index]
+        profile.name = freeName(profile.name + " copy")
+        profile.apps = []
+        return insertBeforeFallback(profile)
+    }
+
+    /// Removes the profile at `index`; false for the fallback, which stays.
+    public mutating func removeProfile(at index: Int) -> Bool {
+        guard profiles.indices.contains(index), index != profiles.count - 1 else { return false }
+        profiles.remove(at: index)
+        return true
+    }
+
+    /// Makes `app` use the profile at `index`, taking it away from any other profile.
+    public mutating func assign(app: String, toProfileAt index: Int) {
+        for i in profiles.indices { profiles[i].apps.removeAll { $0 == app } }
+        profiles[index].apps.append(app)
+    }
+
+    /// Renames a profile, and the dictionary entries limited to it. An empty or taken name is refused.
+    public mutating func rename(profileAt index: Int, to name: String, dictionary: inout UserDictionary) {
+        let trimmed = name.trimmingCharacters(in: .whitespaces)
+        let old = profiles[index].name
+        guard !trimmed.isEmpty, trimmed != old, !profiles.contains(where: { $0.name == trimmed }) else { return }
+        profiles[index].name = trimmed
+        for i in dictionary.entries.indices {
+            dictionary.entries[i].profiles = dictionary.entries[i].profiles?.map { $0 == old ? trimmed : $0 }
+        }
+    }
+
+    private func freeName(_ base: String) -> String {
+        var name = base
+        var number = 2
+        while profiles.contains(where: { $0.name == name }) {
+            name = "\(base) \(number)"
+            number += 1
+        }
+        return name
+    }
+
+    private mutating func insertBeforeFallback(_ profile: Profile) -> Int {
+        let index = max(0, profiles.count - 1)
+        profiles.insert(profile, at: index)
+        return index
+    }
+}
+
+/// Lists edited as one line of text, separated by commas.
+public enum CommaList {
+    public static func parse(_ text: String) -> [String] {
+        text.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+    }
+
+    public static func format(_ items: [String]) -> String {
+        items.joined(separator: ", ")
+    }
+}

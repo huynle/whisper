@@ -34,6 +34,8 @@ final class ManualTranscriber: Transcriber, @unchecked Sendable {
     let model = "test-model"
     private let lock = NSLock()
     private var waiting: [Int: CheckedContinuation<String, Error>] = [:]
+    /// Answers given before their request arrived; delivered when it does, so no answer is ever lost.
+    private var early: [Int: Result<String, Error>] = [:]
     private var calls = 0
 
     var callCount: Int { lock.withLock { calls } }
@@ -43,10 +45,13 @@ final class ManualTranscriber: Transcriber, @unchecked Sendable {
     func transcribe(wav: Data) async throws -> Transcription {
         let number = FakeRecorder.number(of: wav)
         let text: String = try await withCheckedThrowingContinuation { continuation in
-            lock.withLock {
+            let answer: Result<String, Error>? = lock.withLock {
                 calls += 1
+                if let answer = early.removeValue(forKey: number) { return answer }
                 waiting[number] = continuation
+                return nil
             }
+            if let answer { continuation.resume(with: answer) }
         }
         return Transcription(text: text, timing: timing)
     }
@@ -58,7 +63,11 @@ final class ManualTranscriber: Transcriber, @unchecked Sendable {
     }
 
     func answer(_ index: Int, with result: Result<String, Error>) {
-        let continuation = lock.withLock { waiting.removeValue(forKey: index) }
+        let continuation: CheckedContinuation<String, Error>? = lock.withLock {
+            if let continuation = waiting.removeValue(forKey: index) { return continuation }
+            early[index] = result
+            return nil
+        }
         continuation?.resume(with: result)
     }
 
@@ -69,7 +78,7 @@ final class Clock: @unchecked Sendable {
 }
 
 @MainActor
-@Suite struct DictationSessionTests {
+@Suite(.timeLimit(.minutes(1))) struct DictationSessionTests {
     let recorder = FakeRecorder()
     let transcriber = ManualTranscriber()
     let field = FakeField()
