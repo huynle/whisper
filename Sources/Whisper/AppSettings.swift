@@ -37,6 +37,8 @@ final class AppSettings: ObservableObject {
     /// Stored as -1 for "always", because UserDefaults cannot hold infinity.
     @Published var warmSeconds: Double { didSet { defaults.set(warmSeconds.isInfinite ? -1 : warmSeconds, forKey: "warmSeconds") } }
     @Published var cueVolume: Float { didSet { defaults.set(cueVolume, forKey: "cueVolume") } }
+    /// Keeps each recording (for 30 days) next to the detailed timings in the log.
+    @Published var developerMode: Bool { didSet { defaults.set(developerMode, forKey: "developerMode") } }
     /// True while Settings is recording a new shortcut, so the hotkey does not fire meanwhile.
     @Published var capturingShortcut = false
     @Published private(set) var hasAPIKey: Bool
@@ -51,6 +53,7 @@ final class AppSettings: ObservableObject {
         let warm = defaults.object(forKey: "warmSeconds") as? Double ?? 60
         warmSeconds = warm < 0 ? .infinity : warm
         cueVolume = defaults.object(forKey: "cueVolume") as? Float ?? 0.15
+        developerMode = defaults.bool(forKey: "developerMode")
         apiKey = Keychain.read(account: Keychain.omniRoute)
         hasAPIKey = apiKey != nil
     }

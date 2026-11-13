@@ -4,6 +4,9 @@ import Foundation
 // `Whisper --store-key <account>` saves the key read from standard input in the Keychain and exits.
 // The app stores it itself, so the Keychain lets it read the key later without asking.
 let arguments = CommandLine.arguments
+if arguments.count >= 2, arguments[1] == "--bench" {
+    exit(Bench.run(Array(arguments.dropFirst(2))))
+}
 if arguments.count >= 2, arguments[1] == "--store-key" {
     let account = arguments.count >= 3 ? arguments[2] : Keychain.omniRoute
     let key = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)

@@ -61,6 +61,13 @@ struct SettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Developer") {
+                Toggle("Developer mode", isOn: $settings.developerMode)
+                Text("Keeps every recording on this Mac for 30 days, next to the detailed timings in the dictation log, so speed and accuracy can be analysed and models compared.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button("Open Recordings Folder") { NSWorkspace.shared.open(Recordings.folder) }
+            }
+
             Section("Permissions") {
                 permissionRow("Accessibility (hotkey and typing)", permissions.accessibility,
                               "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")

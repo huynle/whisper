@@ -47,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings.$capturingShortcut.sink { [weak self] in self?.listener?.paused = $0 }.store(in: &subscriptions)
         settings.$warmSeconds.sink { [weak self] in self?.recorder.warmSeconds = $0 }.store(in: &subscriptions)
         settings.$cueVolume.sink { [weak self] in self?.cues.volume = $0 }.store(in: &subscriptions)
+        settings.$developerMode.sink { [weak self] on in
+            self?.session.saveAudio = on ? { wav, id in Recordings.save(wav, id: id) } : nil
+            if on { Recordings.purge() }
+        }.store(in: &subscriptions)
 
         requestPermissions()
         startListener()
@@ -156,6 +160,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Open Dictation Log", action: #selector(openLog), keyEquivalent: "").target = self
+        if settings.developerMode {
+            menu.addItem(withTitle: "Open Recordings Folder (developer mode)", action: #selector(openRecordings), keyEquivalent: "").target = self
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Whisper", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
     }
@@ -172,6 +179,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let editor = NSWorkspace.shared.urlForApplication(toOpen: .plainText)
             ?? URL(fileURLWithPath: "/System/Applications/TextEdit.app")
         NSWorkspace.shared.open([log.url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
+    }
+
+    @objc private func openRecordings() {
+        NSWorkspace.shared.open(Recordings.folder)
     }
 
     @objc private func openAccessibility() {
