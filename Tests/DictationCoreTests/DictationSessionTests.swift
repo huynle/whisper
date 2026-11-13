@@ -2,27 +2,38 @@ import Foundation
 import Testing
 @testable import DictationCore
 
-/// Hands back whatever samples the test set, and counts what the session asked of it.
+/// Hands back whatever samples the test set, and counts what the session asked of it. The first sample of
+/// recording n (from 0) carries n, so a fake transcriber can tell which dictation a request belongs to.
 final class FakeRecorder: AudioRecorder {
     var samples: [Float] = Array(repeating: 0.2, count: 16_000)
     var micStartSeconds: Double?
     private(set) var begun = 0
     private(set) var discarded = 0
+    private var ended = 0
 
     func begin() { begun += 1 }
 
     func end() -> Recording {
-        Recording(samples: samples, sampleRate: 16_000, micStartSeconds: micStartSeconds)
+        var audio = samples
+        if !audio.isEmpty { audio[0] = Float(ended) / 32_767 }
+        ended += 1
+        return Recording(samples: audio, sampleRate: 16_000, micStartSeconds: micStartSeconds)
+    }
+
+    /// The recording number carried by a WAV made from `end()`.
+    static func number(of wav: Data) -> Int {
+        Int(Int16(bitPattern: UInt16(wav[44]) | UInt16(wav[45]) << 8))
     }
 
     func discard() { discarded += 1 }
 }
 
-/// Holds every transcription until the test answers it, so the order of answers is up to the test.
+/// Holds every transcription until the test answers it, so the order of answers is up to the test. Requests
+/// are known by their recording's number (FakeRecorder), not by arrival: the session sends them concurrently.
 final class ManualTranscriber: Transcriber, @unchecked Sendable {
     let model = "test-model"
     private let lock = NSLock()
-    private var waiting: [CheckedContinuation<String, Error>] = []
+    private var waiting: [Int: CheckedContinuation<String, Error>] = [:]
     private var calls = 0
 
     var callCount: Int { lock.withLock { calls } }
@@ -30,10 +41,11 @@ final class ManualTranscriber: Transcriber, @unchecked Sendable {
     var timing: RequestTiming?
 
     func transcribe(wav: Data) async throws -> Transcription {
+        let number = FakeRecorder.number(of: wav)
         let text: String = try await withCheckedThrowingContinuation { continuation in
             lock.withLock {
                 calls += 1
-                waiting.append(continuation)
+                waiting[number] = continuation
             }
         }
         return Transcription(text: text, timing: timing)
@@ -46,7 +58,7 @@ final class ManualTranscriber: Transcriber, @unchecked Sendable {
     }
 
     func answer(_ index: Int, with result: Result<String, Error>) {
-        let continuation = lock.withLock { index < waiting.count ? waiting[index] : nil }
+        let continuation = lock.withLock { waiting.removeValue(forKey: index) }
         continuation?.resume(with: result)
     }
 
