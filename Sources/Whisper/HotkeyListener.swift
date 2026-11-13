@@ -16,6 +16,8 @@ final class HotkeyListener {
     private var matcher: BindingMatcher
     private var tap: CFMachPort?
     private let onMatch: (KeyMatch, Double) -> Void
+    /// A mouse click anywhere: the user may have moved the cursor, so typed text must not be corrected.
+    var onClick: (() -> Void)?
     private let ownProcess = Int64(getpid())
 
     init(binding: HotkeyBinding, onMatch: @escaping (KeyMatch, Double) -> Void) {
@@ -29,7 +31,7 @@ final class HotkeyListener {
     /// Starts listening; false when macOS refuses (no Accessibility permission yet).
     func start() -> Bool {
         if tap != nil { return true }
-        let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged]
+        let types: [CGEventType] = [.keyDown, .keyUp, .flagsChanged, .leftMouseDown, .rightMouseDown]
         let mask = types.reduce(CGEventMask(0)) { $0 | CGEventMask(1) << CGEventMask($1.rawValue) }
         guard let tap = CGEvent.tapCreate(
             tap: .cgSessionEventTap, place: .headInsertEventTap, options: .defaultTap, eventsOfInterest: mask,
@@ -53,6 +55,11 @@ final class HotkeyListener {
         }
         // The app's own typing is never a hotkey or the user's input.
         if paused || event.getIntegerValueField(.eventSourceUnixProcessID) == ownProcess {
+            return Unmanaged.passUnretained(event)
+        }
+
+        if type == .leftMouseDown || type == .rightMouseDown {
+            if let onClick { DispatchQueue.main.async(execute: onClick) }
             return Unmanaged.passUnretained(event)
         }
 

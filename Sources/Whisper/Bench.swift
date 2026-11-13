@@ -1,7 +1,7 @@
 import DictationCore
 import Foundation
 
-/// `Whisper --bench [--model <id>] [--runs <n>] <file.wav>...` sends recordings to the speech provider one after
+/// `Whisper --bench [--model <id>] [--runs <n>] [--profile <name>] <file.wav>...` sends recordings to the speech provider one after
 /// another (one connection, as the app uses it) and prints where each request's time went.
 /// Uses the app's stored API key and provider address, unless `--base <url>` and `--key-env <variable>` are given
 /// (to compare providers, e.g. OpenRouter directly against OmniRoute).
@@ -12,12 +12,14 @@ enum Bench {
         var base = UserDefaults.standard.string(forKey: "baseURL") ?? "https://api.ai.huynle.com/v1"
         var key = Keychain.read(account: Keychain.omniRoute)
         var files: [String] = []
+        var profileName: String?
         var rest = arguments[...]
         while let argument = rest.popFirst() {
             switch argument {
             case "--model": model = rest.popFirst() ?? model
             case "--runs": runs = rest.popFirst().flatMap { Int($0) } ?? runs
             case "--base": base = rest.popFirst() ?? base
+            case "--profile": profileName = rest.popFirst()
             case "--key-env":
                 guard let name = rest.popFirst(), let value = ProcessInfo.processInfo.environment[name], !value.isEmpty else {
                     print("--key-env needs the name of a set environment variable")
@@ -37,7 +39,21 @@ enum Bench {
             baseURL: URL(string: base)!, model: model, language: language.isEmpty ? nil : language,
             apiKey: { apiKey }, transport: URLSessionTransport())
 
-        print("model \(model) at \(base), \(runs) run(s) per file")
+        // The profile's clean-up runs after each transcription (from profiles.json, else the defaults).
+        let store = MainActor.assumeIsolated { ProfileStore() }
+        let profiles = MainActor.assumeIsolated { store.profiles }
+        let dictionary = MainActor.assumeIsolated { store.dictionary }
+        let profile = profileName.flatMap { name in profiles.profiles.first { $0.name == name } }
+        if let profileName, profile == nil {
+            print("no profile named \(profileName)")
+            return 2
+        }
+        let cleaner = profile?.cleanupModel.map {
+            OpenAIChatCleaner(baseURL: URL(string: base)!, model: $0, apiKey: { apiKey }, transport: URLSessionTransport())
+        }
+        let instructions = profile.map { CleanupPrompt.system(for: $0, dictionary: dictionary) } ?? ""
+
+        print("model \(model) at \(base), \(runs) run(s) per file" + (profile.map { ", clean-up \($0.name) with \($0.cleanupModel ?? "none")" } ?? ""))
         print("run  total   dns  conn   tls  upload  wait  down  reused proto  bytes   text")
         let done = DispatchSemaphore(value: 0)
         var status: Int32 = 0
@@ -54,6 +70,16 @@ enum Bench {
                     do {
                         let result = try await transcriber.transcribe(wav: wav)
                         print(row(run, result.timing, wall: Date().timeIntervalSince(started), text: result.text))
+                        if let cleaner, let profile {
+                            let raw = dictionary.applyAlways(result.text, profile: profile.name)
+                            let cleanStart = Date()
+                            do {
+                                let cleaned = try await cleaner.clean(raw, instructions: instructions)
+                                print(String(format: "     clean-up %5.0f ms  ", Date().timeIntervalSince(cleanStart) * 1_000) + cleaned.text)
+                            } catch {
+                                print("     clean-up failed: \(error)")
+                            }
+                        }
                     } catch {
                         print("\(run)  failed: \(error)")
                         status = 1

@@ -37,6 +37,8 @@ final class AppSettings: ObservableObject {
     /// Stored as -1 for "always", because UserDefaults cannot hold infinity.
     @Published var warmSeconds: Double { didSet { defaults.set(warmSeconds.isInfinite ? -1 : warmSeconds, forKey: "warmSeconds") } }
     @Published var cueVolume: Float { didSet { defaults.set(cueVolume, forKey: "cueVolume") } }
+    /// A profile chosen by hand in the menu; nil picks it from the app in front.
+    @Published var profileOverride: String? { didSet { defaults.set(profileOverride, forKey: "profileOverride") } }
     /// Keeps each recording (for 30 days) next to the detailed timings in the log.
     @Published var developerMode: Bool { didSet { defaults.set(developerMode, forKey: "developerMode") } }
     /// True while Settings is recording a new shortcut, so the hotkey does not fire meanwhile.
@@ -54,6 +56,7 @@ final class AppSettings: ObservableObject {
         warmSeconds = warm < 0 ? .infinity : warm
         cueVolume = defaults.object(forKey: "cueVolume") as? Float ?? 0.15
         developerMode = defaults.bool(forKey: "developerMode")
+        profileOverride = defaults.string(forKey: "profileOverride")
         apiKey = Keychain.read(account: Keychain.omniRoute)
         hasAPIKey = apiKey != nil
     }
@@ -74,6 +77,12 @@ final class AppSettings: ObservableObject {
             language: language.isEmpty ? nil : language,
             apiKey: { key },
             transport: transport)
+    }
+
+    /// The clean-up engine for `model`, through the same provider and connection as transcription.
+    func makeCleaner(model: String) -> Cleaner {
+        let key = apiKey
+        return OpenAIChatCleaner(baseURL: URL(string: baseURL) ?? URL(string: Self.defaultBaseURL)!, model: model, apiKey: { key }, transport: transport)
     }
 
     private func save(_ value: HotkeyBinding, _ key: String) {

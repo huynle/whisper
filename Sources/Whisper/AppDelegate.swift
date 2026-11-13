@@ -12,6 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let gesture = HotkeyGesture()
     private let recorder = MicRecorder()
     private let cues = CuePlayer()
+    private let store = ProfileStore()
 
     private var statusItem: NSStatusItem!
     private var listener: HotkeyListener?
@@ -36,13 +37,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             transcriber: { [settings] in settings.makeTranscriber() },
             keyboard: TypingKeyboard(),
             now: { ProcessInfo.processInfo.systemUptime },
-            onRecord: { [weak self] record in self?.recorded(record) })
+            onRecord: { [weak self] record in self?.recorded(record) },
+            context: { [weak self] in self?.dictationContext() ?? .plain })
         session.onStatusChange = { [weak self] status in
             self?.show(status)
             if let cue = Cue.for(status) { self?.cues.play(cue) }
         }
         show(.idle)
 
+        listener?.onClick = { [weak self] in self?.session.userInput() }
+        NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.session.userInput() }
+        }
         settings.$binding.sink { [weak self] in self?.listener?.binding = $0 }.store(in: &subscriptions)
         settings.$capturingShortcut.sink { [weak self] in self?.listener?.paused = $0 }.store(in: &subscriptions)
         settings.$warmSeconds.sink { [weak self] in self?.recorder.warmSeconds = $0 }.store(in: &subscriptions)
@@ -63,7 +71,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch match {
         case .bindingDown: apply(gesture.keyDown(at: time))
         case .bindingUp: apply(gesture.keyUp(at: time))
-        case .otherKey: apply(gesture.otherKey(at: time))
+        case .otherKey:
+            session.userInput()
+            apply(gesture.otherKey(at: time))
         case .ignore: break
         }
     }
@@ -89,6 +99,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func recorded(_ record: DictationRecord) {
         log.append(record)
         if record.outcome == .typed { lastText = record.text }
+    }
+
+    /// The profile for the app in front (or the one chosen in the menu), with its dictionary and clean-up engine.
+    private func dictationContext() -> DictationContext {
+        let app = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        let profile = store.profiles.profile(forApp: app, override: settings.profileOverride)
+        return DictationContext(
+            profile: profile, dictionary: store.dictionary,
+            cleaner: profile.cleanupModel.map { settings.makeCleaner(model: $0) })
     }
 
     // MARK: permissions
@@ -152,6 +171,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(withTitle: "Add your API key…", action: #selector(openSettingsAction), keyEquivalent: "").target = self
         }
         if case .failed(let message) = session.status { info("Last dictation failed: \(message)") }
+        if let problem = store.problem { info(problem) }
+
+        let profiles = NSMenuItem(title: "Profile: \(settings.profileOverride ?? "Automatic")", action: nil, keyEquivalent: "")
+        let submenu = NSMenu()
+        let automatic = submenu.addItem(withTitle: "Automatic (by app)", action: #selector(chooseProfile(_:)), keyEquivalent: "")
+        automatic.target = self
+        automatic.state = settings.profileOverride == nil ? .on : .off
+        submenu.addItem(.separator())
+        for profile in store.profiles.profiles {
+            let item = submenu.addItem(withTitle: profile.name, action: #selector(chooseProfile(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = profile.name
+            item.state = settings.profileOverride == profile.name ? .on : .off
+        }
+        submenu.addItem(.separator())
+        submenu.addItem(withTitle: "Edit Profiles…", action: #selector(editProfiles), keyEquivalent: "").target = self
+        submenu.addItem(withTitle: "Edit Dictionary…", action: #selector(editDictionary), keyEquivalent: "").target = self
+        profiles.submenu = submenu
+        menu.addItem(profiles)
         if let error = recorder.lastError { info(error) }
         if let lastText {
             let shown = lastText.count > 50 ? String(lastText.prefix(50)) + "…" : lastText
@@ -173,12 +211,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSPasteboard.general.setString(lastText, forType: .string)
     }
 
-    /// Opens the log in the default plain-text editor: macOS has no app for .jsonl files.
     @objc private func openLog() {
         if !FileManager.default.fileExists(atPath: log.url.path) { try? Data().write(to: log.url) }
+        openInTextEditor(log.url)
+    }
+
+    @objc private func chooseProfile(_ item: NSMenuItem) {
+        settings.profileOverride = item.representedObject as? String
+    }
+
+    @objc private func editProfiles() { openInTextEditor(store.profilesURL) }
+    @objc private func editDictionary() { openInTextEditor(store.dictionaryURL) }
+
+    /// The default plain-text editor: macOS has no app for .jsonl, and may open .json in a viewer.
+    private func openInTextEditor(_ url: URL) {
         let editor = NSWorkspace.shared.urlForApplication(toOpen: .plainText)
             ?? URL(fileURLWithPath: "/System/Applications/TextEdit.app")
-        NSWorkspace.shared.open([log.url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
+        NSWorkspace.shared.open([url], withApplicationAt: editor, configuration: NSWorkspace.OpenConfiguration())
     }
 
     @objc private func openRecordings() {
