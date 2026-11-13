@@ -225,7 +225,7 @@ final class Clock: @unchecked Sendable {
         await transcriber.waitForCalls(2)
         clock.now = 102
         transcriber.answer(1, with: .success("second"))
-        try? await Task.sleep(for: .milliseconds(20))
+        await waitUntil { s.resultsReceived == 1 }
         clock.now = 103
         transcriber.answer(0, with: .success("first"))
         await s.settle()
@@ -269,6 +269,13 @@ final class Clock: @unchecked Sendable {
         #expect(records.value.first?.outcome == .discarded)
         #expect(records.value.first?.audioFile != nil)
     }
+}
+
+/// Waits for `condition`, giving up after 2 seconds so a broken session fails its test instead of hanging.
+@MainActor
+func waitUntil(_ condition: () -> Bool) async {
+    let start = Date()
+    while !condition(), Date().timeIntervalSince(start) < 2 { try? await Task.sleep(for: .milliseconds(1)) }
 }
 
 final class Box<T>: @unchecked Sendable {

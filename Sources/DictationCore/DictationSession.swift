@@ -83,6 +83,8 @@ public final class DictationSession {
     private var nextID = 0
     private var queue: [Pending] = []
     private var tasks: [Task<Void, Never>] = []
+    /// Transcripts received so far, typed or still waiting for an earlier dictation.
+    private(set) var resultsReceived = 0
 
     public var onStatusChange: ((Status) -> Void)?
 
@@ -173,6 +175,7 @@ public final class DictationSession {
         guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
         queue[index].result = result
         queue[index].transcribedAt = now()
+        resultsReceived += 1
         while let first = queue.first, let result = first.result {
             queue.removeFirst()
             complete(first, result)
