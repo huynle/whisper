@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let recorder = MicRecorder()
 
     private var statusItem: NSStatusItem!
-    private var listener: HotkeyListener!
+    private var listener: HotkeyListener?
     private var session: DictationSession!
     private var gestureTimer: Timer?
     private var listenerRetry: Timer?
@@ -21,6 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var subscriptions = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        listener = HotkeyListener(binding: settings.binding) { [weak self] match, time in
+            MainActor.assumeIsolated { self?.keyMatched(match, at: time) }
+        }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
         menu.delegate = self
@@ -35,11 +38,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         session.onStatusChange = { [weak self] status in self?.show(status) }
         show(.idle)
 
-        listener = HotkeyListener(binding: settings.binding) { [weak self] match, time in
-            MainActor.assumeIsolated { self?.keyMatched(match, at: time) }
-        }
-        settings.$binding.sink { [weak self] in self?.listener.binding = $0 }.store(in: &subscriptions)
-        settings.$capturingShortcut.sink { [weak self] in self?.listener.paused = $0 }.store(in: &subscriptions)
+        settings.$binding.sink { [weak self] in self?.listener?.binding = $0 }.store(in: &subscriptions)
+        settings.$capturingShortcut.sink { [weak self] in self?.listener?.paused = $0 }.store(in: &subscriptions)
         settings.$warmSeconds.sink { [weak self] in self?.recorder.warmSeconds = $0 }.store(in: &subscriptions)
 
         requestPermissions()
@@ -91,10 +91,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The listener needs Accessibility; until it is granted, try again every 2 seconds.
     private func startListener() {
+        guard let listener else { return }
         if listener.start() { return }
         listenerRetry = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
-                guard let self, self.listener.start() else { return }
+                guard let self, self.listener?.start() == true else { return }
                 timer.invalidate()
                 self.show(self.session.status)
             }
@@ -107,7 +108,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func show(_ status: DictationSession.Status) {
         guard let button = statusItem.button else { return }
         let (symbol, tint): (String, NSColor?) = {
-            if !listener.isRunning { return ("mic.slash", .systemOrange) }
+            if listener?.isRunning != true { return ("mic.slash", .systemOrange) }
             switch status {
             case .idle: return ("mic", nil)
             case .recording(locked: false): return ("mic.fill", .systemRed)
@@ -128,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(item)
         }
 
-        if !listener.isRunning {
+        if listener?.isRunning != true {
             menu.addItem(withTitle: "Allow Accessibility to use the hotkey…", action: #selector(openAccessibility), keyEquivalent: "").target = self
         } else {
             info("Hold \(settings.binding.displayName) to dictate, double-tap to lock")
