@@ -2,21 +2,23 @@ import Foundation
 import Testing
 @testable import DictationCore
 
-/// Answers every request with a fixed status and body, and keeps the request it was given.
+/// Answers every request with a fixed status, body and timing, and keeps the request it was given.
 final class FakeTransport: HTTPTransport, @unchecked Sendable {
     let status: Int
     let body: String
+    let timing: RequestTiming?
     private(set) var request: URLRequest?
 
-    init(status: Int = 200, body: String) {
+    init(status: Int = 200, body: String, timing: RequestTiming? = nil) {
         self.status = status
         self.body = body
+        self.timing = timing
     }
 
-    func send(_ request: URLRequest) async throws -> (Data, HTTPURLResponse) {
+    func send(_ request: URLRequest) async throws -> HTTPResult {
         self.request = request
         let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
-        return (Data(body.utf8), response)
+        return HTTPResult(data: Data(body.utf8), response: response, timing: timing)
     }
 }
 
@@ -49,7 +51,7 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
 
     @Test func returnsTheTextTrimmed() async throws {
         let transport = FakeTransport(body: #"{"text":"  cd ~/projects/whisper, then run the tests.\n"}"#)
-        #expect(try await transcriber(transport).transcribe(wav: Data()) == "cd ~/projects/whisper, then run the tests.")
+        #expect(try await transcriber(transport).transcribe(wav: Data()).text == "cd ~/projects/whisper, then run the tests.")
     }
 
     @Test func asksWhisperModelsForSegmentsAndDropsTheNonSpeechOnes() async throws {
@@ -58,8 +60,8 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
               {"text":" run the tests","no_speech_prob":0.1},
               {"text":" Thank you.","no_speech_prob":0.9}]}
             """#)
-        let text = try await transcriber(transport, model: "openrouter/openai/whisper-large-v3-turbo").transcribe(wav: Data())
-        #expect(text == "run the tests")
+        let result = try await transcriber(transport, model: "openrouter/openai/whisper-large-v3-turbo").transcribe(wav: Data())
+        #expect(result.text == "run the tests")
         let body = String(decoding: try #require(transport.request?.httpBody), as: UTF8.self)
         #expect(body.contains("name=\"response_format\"\r\n\r\nverbose_json\r\n"))
     }
@@ -69,6 +71,12 @@ final class FakeTransport: HTTPTransport, @unchecked Sendable {
         _ = try await transcriber(transport).transcribe(wav: Data())
         let body = String(decoding: try #require(transport.request?.httpBody), as: UTF8.self)
         #expect(!body.contains("response_format"))
+    }
+
+    @Test func passesOnHowLongTheRequestTook() async throws {
+        let timing = RequestTiming(totalMs: 900, uploadMs: 40, waitMs: 820, reusedConnection: true, requestBytes: 1_000)
+        let transport = FakeTransport(body: #"{"text":"hello"}"#, timing: timing)
+        #expect(try await transcriber(transport).transcribe(wav: Data()).timing == timing)
     }
 
     @Test func failsWithoutAKeyAndSendsNothing() async {

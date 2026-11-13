@@ -27,13 +27,16 @@ final class ManualTranscriber: Transcriber, @unchecked Sendable {
 
     var callCount: Int { lock.withLock { calls } }
 
-    func transcribe(wav: Data) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
+    var timing: RequestTiming?
+
+    func transcribe(wav: Data) async throws -> Transcription {
+        let text: String = try await withCheckedThrowingContinuation { continuation in
             lock.withLock {
                 calls += 1
                 waiting.append(continuation)
             }
         }
+        return Transcription(text: text, timing: timing)
     }
 
     /// Gives up after 2 seconds, so a session that never calls fails its test instead of hanging the run.
@@ -60,13 +63,22 @@ final class Clock: @unchecked Sendable {
     let field = FakeField()
     let clock = Clock()
     let records = Box<[DictationRecord]>([])
+    let saved = Box<[(Data, String)]>([])
 
-    private func session() -> DictationSession {
+    private func session(keepAudio: Bool = false) -> DictationSession {
         let clock = clock
         let records = records
-        return DictationSession(
+        let saved = saved
+        let s = DictationSession(
             recorder: recorder, transcriber: { [transcriber] in transcriber }, keyboard: field,
             now: { clock.now }, onRecord: { records.value.append($0) })
+        if keepAudio {
+            s.saveAudio = { wav, id in
+                saved.value.append((wav, id))
+                return "\(id).wav"
+            }
+        }
+        return s
     }
 
     @Test func aHeldDictationIsTranscribedAndTyped() async {
@@ -198,6 +210,64 @@ final class Clock: @unchecked Sendable {
         #expect(record.audioSeconds == 1)
         #expect(record.micStartSeconds == 0.12)
         #expect(abs((record.finishToTypedSeconds ?? 0) - 0.9) < 0.000_001)
+        #expect(abs((record.transcribeSeconds ?? 0) - 0.9) < 0.000_001)
+    }
+
+    @Test func recordsTheRequestTimingAndHowLongTheResultWaitedForAnEarlierOne() async throws {
+        transcriber.timing = RequestTiming(totalMs: 700, uploadMs: 30, waitMs: 650, reusedConnection: false, requestBytes: 32_044)
+        let s = session()
+        clock.now = 100
+        s.handle(.start)
+        s.handle(.finish)
+        clock.now = 101
+        s.handle(.start)
+        s.handle(.finish)
+        await transcriber.waitForCalls(2)
+        clock.now = 102
+        transcriber.answer(1, with: .success("second"))
+        try? await Task.sleep(for: .milliseconds(20))
+        clock.now = 103
+        transcriber.answer(0, with: .success("first"))
+        await s.settle()
+        let second = try #require(records.value.last)
+        #expect(second.request == transcriber.timing)
+        #expect(second.transcribeSeconds == 1)
+        #expect(second.waitSeconds == 1)
+        #expect(records.value.first?.waitSeconds == 0)
+    }
+
+    @Test func keepsTheAudioOnlyWhenAskedTo() async throws {
+        let s = session(keepAudio: true)
+        s.handle(.start)
+        s.handle(.finish)
+        await transcriber.waitForCalls(1)
+        transcriber.answer(0, with: .success("hi"))
+        await s.settle()
+        let record = try #require(records.value.first)
+        #expect(saved.value.count == 1)
+        #expect(saved.value.first?.0.prefix(4) == Data("RIFF".utf8))
+        #expect(record.audioFile == "\(record.id).wav")
+    }
+
+    @Test func keepsNoAudioByDefault() async throws {
+        let s = session()
+        s.handle(.start)
+        s.handle(.finish)
+        await transcriber.waitForCalls(1)
+        transcriber.answer(0, with: .success("hi"))
+        await s.settle()
+        #expect(records.value.first?.audioFile == nil)
+    }
+
+    @Test func keepsTheAudioOfDiscardedDictationsToo() async {
+        recorder.samples = Array(repeating: 0.0001, count: 16_000)
+        let s = session(keepAudio: true)
+        s.handle(.start)
+        s.handle(.finish)
+        await s.settle()
+        #expect(saved.value.count == 1)
+        #expect(records.value.first?.outcome == .discarded)
+        #expect(records.value.first?.audioFile != nil)
     }
 }
 

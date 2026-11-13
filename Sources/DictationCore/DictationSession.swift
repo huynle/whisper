@@ -20,10 +20,11 @@ public protocol AudioRecorder: AnyObject {
     func discard()
 }
 
-/// What happened to one dictation and how long each step took, for the log and later for developer mode.
-public struct DictationRecord: Codable, Equatable, Sendable {
+/// What happened to one dictation and how long each step took, for the log and developer mode.
+public struct DictationRecord: Codable, Sendable {
     public enum Outcome: String, Codable, Sendable { case typed, empty, discarded, failed, cancelled }
 
+    public var id = UUID().uuidString
     public var date = Date()
     public var outcome: Outcome
     /// Why it was discarded or failed.
@@ -36,13 +37,16 @@ public struct DictationRecord: Codable, Equatable, Sendable {
     public var micStartSeconds: Double?
     /// From the finish to the text being typed: the wait the user feels.
     public var finishToTypedSeconds: Double?
-
-    /// Equal when everything but the date is equal.
-    public static func == (a: Self, b: Self) -> Bool {
-        a.outcome == b.outcome && a.detail == b.detail && a.text == b.text && a.model == b.model
-            && a.recordingSeconds == b.recordingSeconds && a.audioSeconds == b.audioSeconds
-            && a.micStartSeconds == b.micStartSeconds && a.finishToTypedSeconds == b.finishToTypedSeconds
-    }
+    /// From the finish to the transcript arriving.
+    public var transcribeSeconds: Double?
+    /// The transcript waiting for an earlier dictation to be typed first.
+    public var waitSeconds: Double?
+    /// Typing the text.
+    public var typingSeconds: Double?
+    /// The request's own breakdown (connection, upload, provider, download).
+    public var request: RequestTiming?
+    /// The saved recording (developer mode), a file name in the recordings folder.
+    public var audioFile: String?
 }
 
 /// Runs dictations from hotkey actions: records, drops presses without speech, transcribes, and types each
@@ -63,7 +67,8 @@ public final class DictationSession {
         let model: String
         let finishedAt: Double
         var record: DictationRecord
-        var result: Result<String, Error>?
+        var result: Result<Transcription, Error>?
+        var transcribedAt: Double?
     }
 
     private let recorder: AudioRecorder
@@ -80,6 +85,9 @@ public final class DictationSession {
     private var tasks: [Task<Void, Never>] = []
 
     public var onStatusChange: ((Status) -> Void)?
+
+    /// Developer mode: keeps each recording. Given the WAV and the record's id, returns the saved file's name.
+    public var saveAudio: ((Data, String) -> String?)?
 
     public private(set) var status = Status.idle {
         didSet { if status != oldValue { onStatusChange?(status) } }
@@ -138,6 +146,9 @@ public final class DictationSession {
             audioSeconds: Double(recording.samples.count) / Double(recording.sampleRate),
             micStartSeconds: recording.micStartSeconds)
 
+        let wav = WAV.encode(recording.samples, sampleRate: recording.sampleRate)
+        if let saveAudio { record.audioFile = saveAudio(wav, record.id) }
+
         if let reason = AudioCheck.discardReason(recording.samples, sampleRate: recording.sampleRate) {
             record.outcome = .discarded
             record.detail = reason
@@ -151,17 +162,17 @@ public final class DictationSession {
         nextID += 1
         queue.append(Pending(id: id, model: engine.model, finishedAt: finishedAt, record: record))
 
-        let wav = WAV.encode(recording.samples, sampleRate: recording.sampleRate)
         tasks.append(Task {
-            let result: Result<String, Error>
+            let result: Result<Transcription, Error>
             do { result = .success(try await engine.transcribe(wav: wav)) } catch { result = .failure(error) }
             self.deliver(result, for: id)
         })
     }
 
-    private func deliver(_ result: Result<String, Error>, for id: Int) {
+    private func deliver(_ result: Result<Transcription, Error>, for id: Int) {
         guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
         queue[index].result = result
+        queue[index].transcribedAt = now()
         while let first = queue.first, let result = first.result {
             queue.removeFirst()
             complete(first, result)
@@ -169,15 +180,24 @@ public final class DictationSession {
         updateStatus()
     }
 
-    private func complete(_ pending: Pending, _ result: Result<String, Error>) {
+    private func complete(_ pending: Pending, _ result: Result<Transcription, Error>) {
         var record = pending.record
+        let start = now()
+        if let transcribedAt = pending.transcribedAt {
+            record.transcribeSeconds = transcribedAt - pending.finishedAt
+            record.waitSeconds = start - transcribedAt
+        }
         switch result {
-        case .success(let text) where text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
+        case .success(let transcription) where transcription.text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty:
             record.outcome = .empty
-        case .success(let text):
-            LiveTyper(keyboard: keyboard).render(text)
-            record.text = text
-            record.finishToTypedSeconds = now() - pending.finishedAt
+            record.request = transcription.timing
+        case .success(let transcription):
+            record.request = transcription.timing
+            LiveTyper(keyboard: keyboard).render(transcription.text)
+            let end = now()
+            record.text = transcription.text
+            record.typingSeconds = end - start
+            record.finishToTypedSeconds = end - pending.finishedAt
         case .failure(let error):
             let message = (error as? TranscriptionError)?.description ?? error.localizedDescription
             record.outcome = .failed
