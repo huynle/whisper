@@ -41,6 +41,8 @@ final class AppSettings: ObservableObject {
     @Published var profileOverride: String? { didSet { defaults.set(profileOverride, forKey: "profileOverride") } }
     /// Keeps each recording (for 30 days) next to the detailed timings in the log.
     @Published var developerMode: Bool { didSet { defaults.set(developerMode, forKey: "developerMode") } }
+    /// The Settings tab shown: "general", "profiles" or "dictionary".
+    @Published var settingsTab = "general"
     /// True while Settings is recording a new shortcut, so the hotkey does not fire meanwhile.
     @Published var capturingShortcut = false
     @Published private(set) var hasAPIKey: Bool

@@ -62,7 +62,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         requestPermissions()
         startListener()
-        if !settings.hasAPIKey || CommandLine.arguments.contains("--open-settings") { openSettings() }
+        // `--open-settings [general|profiles|dictionary]` opens Settings at launch, on that tab.
+        if let flag = CommandLine.arguments.firstIndex(of: "--open-settings") {
+            let next = CommandLine.arguments.indices.contains(flag + 1) ? CommandLine.arguments[flag + 1] : "general"
+            openSettings(tab: ["general", "profiles", "dictionary"].contains(next) ? next : "general")
+        } else if !settings.hasAPIKey {
+            openSettings()
+        }
     }
 
     // MARK: hotkey to session
@@ -172,6 +178,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         if case .failed(let message) = session.status { info("Last dictation failed: \(message)") }
         if let problem = store.problem { info(problem) }
+        store.refresh()
 
         let profiles = NSMenuItem(title: "Profile: \(settings.profileOverride ?? "Automatic")", action: nil, keyEquivalent: "")
         let submenu = NSMenu()
@@ -220,8 +227,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         settings.profileOverride = item.representedObject as? String
     }
 
-    @objc private func editProfiles() { openInTextEditor(store.profilesURL) }
-    @objc private func editDictionary() { openInTextEditor(store.dictionaryURL) }
+    @objc private func editProfiles() { openSettings(tab: "profiles") }
+    @objc private func editDictionary() { openSettings(tab: "dictionary") }
 
     /// The default plain-text editor: macOS has no app for .jsonl, and may open .json in a viewer.
     private func openInTextEditor(_ url: URL) {
@@ -240,9 +247,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openSettingsAction() { openSettings() }
 
-    private func openSettings() {
+    private func openSettings(tab: String? = nil) {
+        if let tab { settings.settingsTab = tab }
         if settingsWindow == nil {
-            let hosting = NSHostingController(rootView: SettingsView(settings: settings))
+            let hosting = NSHostingController(rootView: SettingsView(settings: settings, store: store))
             hosting.sizingOptions = [.preferredContentSize]
             let window = NSWindow(contentViewController: hosting)
             window.title = "Whisper Settings"

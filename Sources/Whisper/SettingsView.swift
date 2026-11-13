@@ -5,6 +5,27 @@ import SwiftUI
 
 struct SettingsView: View {
     @ObservedObject var settings: AppSettings
+    @ObservedObject var store: ProfileStore
+
+    var body: some View {
+        TabView(selection: $settings.settingsTab) {
+            GeneralSettingsView(settings: settings)
+                .tabItem { Label("General", systemImage: "gearshape") }
+                .tag("general")
+            ProfilesView(store: store)
+                .tabItem { Label("Profiles", systemImage: "person.crop.rectangle.stack") }
+                .tag("profiles")
+            DictionaryView(store: store)
+                .tabItem { Label("Dictionary", systemImage: "character.book.closed") }
+                .tag("dictionary")
+        }
+        // Grouped Forms scroll, so they report no height of their own; without a fixed size the window collapses.
+        .frame(width: 760, height: 660)
+    }
+}
+
+struct GeneralSettingsView: View {
+    @ObservedObject var settings: AppSettings
     @State private var keyDraft = ""
     @State private var keyMessage: String?
     @State private var captureMessage: String?
@@ -78,8 +99,6 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        // A grouped Form scrolls, so it reports no height of its own; without a fixed size the window collapses.
-        .frame(width: 520, height: 640)
         .onReceive(refresh) { _ in permissions = Permissions.current() }
         .onDisappear { stopCapture() }
     }
