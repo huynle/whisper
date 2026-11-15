@@ -22,6 +22,12 @@ final class ReviewModel: ObservableObject {
         self.store = store
     }
 
+    /// Shows suggestions a background review already made.
+    func show(_ outcome: Reviewer.Outcome) {
+        chosen = []
+        state = .ready(outcome)
+    }
+
     func start(all: Bool = false) {
         state = .running
         let since = all ? nil : UserDefaults.standard.object(forKey: Reviewer.lastReviewKey) as? Date

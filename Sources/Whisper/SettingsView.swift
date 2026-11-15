@@ -32,6 +32,9 @@ struct GeneralSettingsView: View {
     @State private var captureMessage: String?
     @State private var monitor: Any?
     @State private var capture = ShortcutCapture()
+    @State private var capturing: HotkeyTarget?
+
+    enum HotkeyTarget: String { case dictate, fix, review }
     @State private var permissions = Permissions.current()
     @State private var openAtLogin = LoginItem.isEnabled
     @State private var loginMessage: String?
@@ -58,21 +61,17 @@ struct GeneralSettingsView: View {
                 }
             }
 
-            Section("Hotkey") {
-                HStack {
-                    Text("Dictate with")
-                    Spacer()
-                    Text(settings.capturingShortcut ? "Press the new shortcut…" : settings.binding.displayName)
-                        .foregroundStyle(settings.capturingShortcut ? .secondary : .primary)
-                    Button(settings.capturingShortcut ? "Cancel" : "Change…") {
-                        settings.capturingShortcut ? stopCapture() : startCapture()
-                    }
-                }
+            Section("Hotkeys") {
+                hotkeyRow("Dictate", .dictate, settings.binding)
+                Text("Hold to talk; release to finish. Double-tap to keep listening; tap again to finish.")
+                    .font(.caption).foregroundStyle(.secondary)
+                hotkeyRow("Fix the last dictation", .fix, settings.fixBinding)
+                Text("Hold and say it again to replace what was typed; tap to type the fix. Either way the correction is kept for the review.")
+                    .font(.caption).foregroundStyle(.secondary)
+                hotkeyRow("Review dictations", .review, settings.reviewBinding)
                 if let captureMessage {
                     Text(captureMessage).font(.caption).foregroundStyle(.orange)
                 }
-                Text("Hold to talk; release to finish. Double-tap to keep listening; tap again to finish.")
-                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Speech model") {
@@ -105,6 +104,9 @@ struct GeneralSettingsView: View {
             }
 
             Section("Learning") {
+                Toggle("Review on my own and notify me", isOn: $settings.autoReview)
+                Text("After 5 corrections, or once a day, Whisper asks the review model for suggestions in the background and shows a notification when there are some. Nothing changes until you save a suggestion.")
+                    .font(.caption).foregroundStyle(.secondary)
                 Toggle("Learn from my corrections", isOn: $settings.learnFromEdits)
                 Text("For 30 seconds after a dictation, Whisper notices when you fix what it typed, and keeps the fixed text (only that) for the review. Fields that hide their text, like passwords and most terminals, are never read.")
                     .font(.caption).foregroundStyle(.secondary)
@@ -163,9 +165,43 @@ struct GeneralSettingsView: View {
         }
     }
 
-    private func startCapture() {
+    private func hotkeyRow(_ title: String, _ target: HotkeyTarget, _ binding: HotkeyBinding?) -> some View {
+        HStack {
+            Text(title)
+            Spacer()
+            Text(capturing == target ? "Press the new shortcut…" : binding?.displayName ?? "Not set")
+                .foregroundStyle(capturing == target || binding == nil ? .secondary : .primary)
+            if target != .dictate, binding != nil, capturing != target {
+                Button("Clear") { assign(nil, to: target) }
+            }
+            Button(capturing == target ? "Cancel" : "Change…") {
+                capturing == target ? stopCapture() : startCapture(target)
+            }
+            .disabled(capturing != nil && capturing != target)
+        }
+    }
+
+    private func assign(_ binding: HotkeyBinding?, to target: HotkeyTarget) {
+        switch target {
+        case .dictate: if let binding { settings.binding = binding }
+        case .fix: settings.fixBinding = binding
+        case .review: settings.reviewBinding = binding
+        }
+    }
+
+    /// The other hotkey `binding` is already used for, if any.
+    private func clash(_ binding: HotkeyBinding, for target: HotkeyTarget) -> String? {
+        let others: [(HotkeyTarget, HotkeyBinding?, String)] = [
+            (.dictate, settings.binding, "dictating"), (.fix, settings.fixBinding, "fixing"), (.review, settings.reviewBinding, "reviewing"),
+        ]
+        return others.first { $0.0 != target && $0.1 == binding }?.2
+    }
+
+    private func startCapture(_ target: HotkeyTarget) {
+        stopCapture()
         capture = ShortcutCapture()
         captureMessage = nil
+        capturing = target
         settings.capturingShortcut = true
         monitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown, .flagsChanged]) { event in
             let flags = UInt64(event.modifierFlags.rawValue)
@@ -175,8 +211,13 @@ struct GeneralSettingsView: View {
             switch capture.handle(input) {
             case .listening: break
             case .bound(let binding):
-                settings.binding = binding
-                stopCapture()
+                guard let target = capturing else { break }
+                if let use = clash(binding, for: target) {
+                    captureMessage = "\(binding.displayName) is already the hotkey for \(use). Choose another."
+                } else {
+                    assign(binding, to: target)
+                    stopCapture()
+                }
             case .rejected(let message): captureMessage = message
             case .cancelled: stopCapture()
             }
@@ -187,6 +228,7 @@ struct GeneralSettingsView: View {
     private func stopCapture() {
         if let monitor { NSEvent.removeMonitor(monitor) }
         monitor = nil
+        capturing = nil
         settings.capturingShortcut = false
     }
 }

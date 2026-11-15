@@ -52,6 +52,7 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
     let cleaner = ManualCleaner()
     let field = FakeField()
     let records = Box<[DictationRecord]>([])
+    let corrections = Box<[Feedback]>([])
 
     private func profile(_ typing: Profile.Typing, trailingSpace: Bool = false) -> Profile {
         var p = Profile.fallback
@@ -68,6 +69,8 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
             recorder: recorder, transcriber: { [transcriber] in transcriber }, keyboard: field,
             now: { 0 }, onRecord: { records.value.append($0) }, context: { context })
         s.cleanupTimeout = cleanupTimeout
+        let corrections = corrections
+        s.onCorrection = { corrections.value.append($0) }
         return s
     }
 
@@ -247,5 +250,89 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
         await s.settle()
         #expect(field.text == "is that a good pattern?")
         #expect(records.value.first?.cleanupRejected == nil)
+    }
+
+    // MARK: fixing the last dictation
+
+    private func typeFirst(_ s: DictationSession, says: String, cleaned: String) async {
+        await dictate(s, number: 0, says: says)
+        await cleaner.waitFor(says)
+        cleaner.answer(says, with: .success(cleaned))
+        await s.settle()
+    }
+
+    private func fix(_ s: DictationSession, number: Int, says: String) async {
+        s.handle(.start, fix: true)
+        s.handle(.finish)
+        await transcriber.waitForCalls(number + 1)
+        transcriber.answer(number, with: .success(says))
+    }
+
+    @Test func sayingItAgainReplacesTheLastDictation() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "cd to projects", cleaned: "cd to projects")
+        await fix(s, number: 1, says: "cd tilde slash projects")
+        await cleaner.waitFor("cd tilde slash projects")
+        cleaner.answer("cd tilde slash projects", with: .success("cd ~/projects"))
+        await s.settle()
+        #expect(field.text == "cd ~/projects")
+        let first = try #require(records.value.first)
+        let fixRecord = try #require(records.value.last)
+        #expect(fixRecord.fixes == first.id)
+        #expect(fixRecord.outcome == .typed)
+        let correction = try #require(corrections.value.first)
+        #expect(correction.source == .resaid)
+        #expect(correction.dictationID == first.id)
+        #expect(correction.typedText == "cd to projects")
+        #expect(correction.correctedText == "cd ~/projects")
+    }
+
+    @Test func aFixWaitsForTheCleanTextEvenWhenTheProfileTypesAtOnce() async throws {
+        let s = session(profile(.rawThenFix))
+        await typeFirst(s, says: "hello", cleaned: "Hello.")
+        #expect(field.text == "Hello.")
+        await fix(s, number: 1, says: "goodbye")
+        await cleaner.waitFor("goodbye")
+        #expect(field.text == "Hello.")
+        cleaner.answer("goodbye", with: .success("Goodbye."))
+        await s.settle()
+        #expect(field.text == "Goodbye.")
+    }
+
+    @Test func aFixAfterTheUserTypedIsSavedButNotTyped() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "hello", cleaned: "Hello.")
+        s.userInput()
+        await fix(s, number: 1, says: "goodbye")
+        await cleaner.waitFor("goodbye")
+        cleaner.answer("goodbye", with: .success("Goodbye."))
+        await s.settle()
+        #expect(field.text == "Hello.")
+        let fixRecord = try #require(records.value.last)
+        #expect(fixRecord.outcome == .failed)
+        #expect(fixRecord.text == "Goodbye.")
+        #expect(fixRecord.detail?.hasPrefix("Not replaced") == true)
+        #expect(corrections.value.first?.correctedText == "Goodbye.")
+    }
+
+    @Test func aFixWithNothingTypedTypesNothing() async throws {
+        let s = session(profile(.waitForClean))
+        await fix(s, number: 0, says: "goodbye")
+        await cleaner.waitFor("goodbye")
+        cleaner.answer("goodbye", with: .success("Goodbye."))
+        await s.settle()
+        #expect(field.text == "")
+        #expect(records.value.last?.detail == "Nothing to fix: no dictation was typed yet")
+        #expect(corrections.value.isEmpty)
+    }
+
+    @Test func aTypedCorrectionReplacesTheLastDictation() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "cd to projects", cleaned: "cd to projects")
+        #expect(s.correctLast("cd ~/projects"))
+        #expect(field.text == "cd ~/projects")
+        s.userInput()
+        #expect(!s.correctLast("cd ~/other"))
+        #expect(field.text == "cd ~/projects")
     }
 }

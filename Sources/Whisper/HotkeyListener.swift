@@ -6,23 +6,24 @@ import Foundation
 /// A key combination is kept from the focused app; everything else passes through untouched.
 /// Needs Accessibility permission (an event tap that may drop events).
 final class HotkeyListener {
-    var binding: HotkeyBinding {
-        didSet { matcher = BindingMatcher(binding: binding) }
+    /// The hotkeys listened for, by position (dictate, fix, review); nil for one not set.
+    var bindings: [HotkeyBinding?] {
+        didSet { router = HotkeyRouter(bindings: bindings) }
     }
 
     /// While true (recording a new shortcut in Settings), events pass through unexamined.
     var paused = false
 
-    private var matcher: BindingMatcher
+    private var router: HotkeyRouter
     private var tap: CFMachPort?
-    private let onMatch: (KeyMatch, Double) -> Void
+    private let onMatch: (Int, KeyMatch, Double) -> Void
     /// A mouse click anywhere: the user may have moved the cursor, so typed text must not be corrected.
     var onClick: (() -> Void)?
     private let ownProcess = Int64(getpid())
 
-    init(binding: HotkeyBinding, onMatch: @escaping (KeyMatch, Double) -> Void) {
-        self.binding = binding
-        self.matcher = BindingMatcher(binding: binding)
+    init(bindings: [HotkeyBinding?], onMatch: @escaping (Int, KeyMatch, Double) -> Void) {
+        self.bindings = bindings
+        self.router = HotkeyRouter(bindings: bindings)
         self.onMatch = onMatch
     }
 
@@ -73,12 +74,11 @@ final class HotkeyListener {
         default: return Unmanaged.passUnretained(event)
         }
 
-        let match = matcher.handle(input)
-        let swallow = matcher.swallows(input)
-        if match != .ignore {
+        let (matches, swallow) = router.handle(input)
+        if !matches.isEmpty {
             let time = ProcessInfo.processInfo.systemUptime
             // Return to macOS at once; starting the microphone can take long enough for the tap to be switched off.
-            DispatchQueue.main.async { self.onMatch(match, time) }
+            DispatchQueue.main.async { for (index, match) in matches { self.onMatch(index, match, time) } }
         }
         return swallow ? nil : Unmanaged.passUnretained(event)
     }

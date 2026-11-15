@@ -62,6 +62,8 @@ public struct DictationRecord: Codable, Sendable {
     public var cleanupRejected: String?
     /// The bundle identifier of the app it was dictated into.
     public var app: String?
+    /// A fix: the id of the dictation it replaced.
+    public var fixes: String?
 }
 
 /// Runs dictations from hotkey actions: records, drops presses without speech, transcribes, cleans up per the
@@ -85,6 +87,8 @@ public final class DictationSession {
         let id: Int
         let finishedAt: Double
         let context: DictationContext
+        /// Said with the fix hotkey: replaces the last dictation instead of adding to it.
+        var isFix = false
         var record: DictationRecord
         /// The raw text, or why there is none; nil until the transcript arrives.
         var transcript: Result<String, Error>?
@@ -120,13 +124,18 @@ public final class DictationSession {
     private var nextID = 0
     private var queue: [Pending] = []
     private var awaitingRevision: [Int: AwaitingRevision] = [:]
-    /// The dictation typed last, the only one that can still be corrected in place.
-    private var lastTyped: (id: Int, typer: LiveTyper)?
+    /// The dictation typed last, the only one that can still be corrected in place; `record.text` is what the
+    /// field holds now.
+    private var lastTyped: (id: Int, typer: LiveTyper, record: DictationRecord, trailingSpace: Bool)?
+    private var recordingIsFix = false
     private var tasks: [Task<Void, Never>] = []
     /// Transcripts received so far, typed or still waiting.
     private(set) var resultsReceived = 0
 
     public var onStatusChange: ((Status) -> Void)?
+
+    /// A fix of the last dictation, said again or typed: what was typed and what the user meant.
+    public var onCorrection: ((Feedback) -> Void)?
 
     /// Developer mode: keeps each recording. Given the WAV and the record's id, returns the saved file's name.
     public var saveAudio: ((Data, String) -> String?)?
@@ -155,10 +164,12 @@ public final class DictationSession {
         self.context = context
     }
 
-    public func handle(_ action: GestureAction) {
+    /// `fix`: the recording that starts replaces the last dictation (the fix hotkey) instead of adding to it.
+    public func handle(_ action: GestureAction, fix: Bool = false) {
         switch action {
         case .start:
             guard recordingSince == nil else { return }
+            recordingIsFix = fix
             lastFailure = nil
             recordingSince = now()
             recordingContext = context()
@@ -175,9 +186,30 @@ public final class DictationSession {
         case .finish:
             guard let since = recordingSince else { return }
             recordingSince = nil
-            finish(recording: recorder.end(), since: since, context: recordingContext ?? context())
+            finish(recording: recorder.end(), since: since, context: recordingContext ?? context(), fix: recordingIsFix)
         }
         updateStatus()
+    }
+
+    /// True while a recording is running.
+    public var isRecording: Bool { recordingSince != nil }
+
+    /// Replaces the last dictation with `text` typed by the user, if it is still untouched in the field.
+    @discardableResult
+    public func correctLast(_ text: String) -> Bool {
+        guard let last = lastTyped else { return false }
+        dropRevision(of: last.id, because: "Replaced by a typed correction")
+        guard case .typed = last.typer.render(text + (last.trailingSpace ? " " : "")) else { return false }
+        lastTyped?.record.text = text
+        return true
+    }
+
+    /// A raw-then-fix correction still on its way would undo a fix; it is dropped, and its record written.
+    private func dropRevision(of id: Int, because reason: String) {
+        guard var waiting = awaitingRevision.removeValue(forKey: id) else { return }
+        waiting.record.revised = false
+        waiting.record.detail = reason
+        onRecord(waiting.record)
     }
 
     /// The user typed or clicked: what is in the field is no longer known, so nothing typed so far is corrected.
@@ -196,7 +228,10 @@ public final class DictationSession {
 
     // MARK: recording to transcript
 
-    private func finish(recording: Recording, since: Double, context: DictationContext) {
+    private func finish(recording: Recording, since: Double, context: DictationContext, fix: Bool) {
+        var context = context
+        // A fix replaces text in place, so it is typed once, clean.
+        if fix { context.profile.typing = .waitForClean }
         let finishedAt = now()
         var record = DictationRecord(
             outcome: .typed,
@@ -220,7 +255,7 @@ public final class DictationSession {
         record.model = engine.model
         let id = nextID
         nextID += 1
-        queue.append(Pending(id: id, finishedAt: finishedAt, context: context, record: record))
+        queue.append(Pending(id: id, finishedAt: finishedAt, context: context, isFix: fix, record: record))
 
         tasks.append(Task {
             let result: Result<Transcription, Error>
@@ -339,6 +374,7 @@ public final class DictationSession {
             } else if case .typed = waiting.typer.render(target) {
                 record.revised = true
                 record.text = transcription.text
+                lastTyped?.record.text = transcription.text
             } else {
                 record.revised = false
                 record.detail = "Not corrected: you typed or clicked after it was typed"
@@ -400,12 +436,14 @@ public final class DictationSession {
             Self.note(error, in: &record)
         }
 
+        if pending.isFix { return completeFix(pending, record: record, text: text, start: start) }
+
         let trailingSpace = pending.context.profile.trailingSpace
         let typer = LiveTyper(keyboard: keyboard)
         typer.render(text + (trailingSpace ? " " : ""))
         let end = now()
-        lastTyped = (pending.id, typer)
         record.text = text
+        lastTyped = (pending.id, typer, record, trailingSpace)
         record.typingSeconds = end - start
         record.finishToTypedSeconds = end - pending.finishedAt
 
@@ -414,6 +452,36 @@ public final class DictationSession {
         } else {
             onRecord(record)
         }
+    }
+
+    /// A fix: replaces the last dictation in place when the field still holds it as typed. Either way the
+    /// correction is reported, since what the user meant is worth keeping even when it cannot be typed.
+    private func completeFix(_ pending: Pending, record: DictationRecord, text: String, start: Double) {
+        var record = record
+        record.text = text
+        guard let last = lastTyped else {
+            record.outcome = .failed
+            record.detail = "Nothing to fix: no dictation was typed yet"
+            lastFailure = record.detail
+            onRecord(record)
+            return
+        }
+        dropRevision(of: last.id, because: "Replaced by a fix")
+        record.fixes = last.record.id
+        onCorrection?(Feedback(source: .resaid, record: last.record, correctedText: text))
+        if case .typed = last.typer.render(text + (last.trailingSpace ? " " : "")) {
+            var replaced = last.record
+            replaced.text = text
+            lastTyped = (pending.id, last.typer, replaced, last.trailingSpace)
+            let end = now()
+            record.typingSeconds = end - start
+            record.finishToTypedSeconds = end - pending.finishedAt
+        } else {
+            record.outcome = .failed
+            record.detail = "Not replaced: you typed or clicked after it was typed. The correction was saved."
+            lastFailure = record.detail
+        }
+        onRecord(record)
     }
 
     private static func message(_ error: Error) -> String {

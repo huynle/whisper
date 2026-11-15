@@ -12,6 +12,8 @@ public struct HotkeyBinding: Codable, Equatable, Sendable {
 
     /// The first-run default. Wispr Flow defaults to Fn, so this avoids a clash while both run.
     public static let rightOption = HotkeyBinding(keyCode: 61, modifiers: 0)
+    /// The fix hotkey's default.
+    public static let rightCommand = HotkeyBinding(keyCode: 54, modifiers: 0)
 
     /// True for a modifier key used on its own.
     public var isModifierOnly: Bool {

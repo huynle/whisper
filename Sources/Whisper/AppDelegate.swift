@@ -4,15 +4,22 @@ import Combine
 import DictationCore
 import SwiftUI
 import UniformTypeIdentifiers
+import UserNotifications
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUserNotificationCenterDelegate {
     private let settings = AppSettings()
     private let log = DictationLog()
     private let feedbackLog = DictationLog(fileName: "feedback.jsonl")
     /// The last dictation typed, for "That Was Wrong…".
     private var lastRecord: DictationRecord?
     private let gesture = HotkeyGesture()
+    private let fixGesture = FixGesture()
+    private var fixTimer: Timer?
+    /// True while a recording started by the fix hotkey runs.
+    private var fixRecording = false
+    private var correctionBox: CorrectionBox?
+    private lazy var autoReviewer = AutoReviewer(settings: settings, store: store)
     private let recorder = MicRecorder()
     private let cues = CuePlayer()
     private let store = ProfileStore()
@@ -24,7 +31,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var listenerRetry: Timer?
     private var settingsWindow: NSWindow?
     private var reviewWindow: NSWindow?
-    private lazy var editWatcher = EditWatcher { [weak self] feedback in self?.feedbackLog.append(feedback) }
+    private lazy var editWatcher = EditWatcher { [weak self] feedback in self?.saveFeedback(feedback) }
     private var lastText: String?
     private var subscriptions = Set<AnyCancellable>()
 
@@ -32,8 +39,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         LoginItem.enableOnFirstInstalledLaunch()
         lastRecord = log.lastTyped()
         lastText = lastRecord?.text
-        listener = HotkeyListener(binding: settings.binding) { [weak self] match, time in
-            MainActor.assumeIsolated { self?.keyMatched(match, at: time) }
+        listener = HotkeyListener(bindings: hotkeys) { [weak self] index, match, time in
+            MainActor.assumeIsolated { self?.keyMatched(index, match, at: time) }
         }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         let menu = NSMenu()
@@ -47,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             now: { ProcessInfo.processInfo.systemUptime },
             onRecord: { [weak self] record in self?.recorded(record) },
             context: { [weak self] in self?.dictationContext() ?? .plain })
+        session.onCorrection = { [weak self] feedback in self?.saveFeedback(feedback) }
         session.onStatusChange = { [weak self] status in
             self?.show(status)
             if let cue = Cue.for(status) { self?.cues.play(cue) }
@@ -55,13 +63,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         show(.idle)
 
-        listener?.onClick = { [weak self] in self?.session.userInput() }
+        listener?.onClick = { [weak self] in self?.interfered() }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.session.userInput() }
+            MainActor.assumeIsolated { self?.interfered() }
         }
-        settings.$binding.sink { [weak self] in self?.listener?.binding = $0 }.store(in: &subscriptions)
+        Publishers.CombineLatest3(settings.$binding, settings.$fixBinding, settings.$reviewBinding)
+            .sink { [weak self] in self?.listener?.bindings = [$0, $1, $2] }.store(in: &subscriptions)
         settings.$capturingShortcut.sink { [weak self] in self?.listener?.paused = $0 }.store(in: &subscriptions)
         settings.$warmSeconds.sink { [weak self] in self?.recorder.warmSeconds = $0 }.store(in: &subscriptions)
         settings.$cueVolume.sink { [weak self] in self?.cues.volume = $0 }.store(in: &subscriptions)
@@ -72,6 +81,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         requestPermissions()
         startListener()
+        UNUserNotificationCenter.current().delegate = self
+        autoReviewer.start()
         // `--open-settings [general|profiles|dictionary]` opens Settings at launch, on that tab.
         if let flag = CommandLine.arguments.firstIndex(of: "--open-settings") {
             let next = CommandLine.arguments.indices.contains(flag + 1) ? CommandLine.arguments[flag + 1] : "general"
@@ -89,7 +100,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: hotkey to session
 
-    private func keyMatched(_ match: KeyMatch, at time: Double) {
+    private var hotkeys: [HotkeyBinding?] { [settings.binding, settings.fixBinding, settings.reviewBinding] }
+
+    private func interfered() {
+        session.userInput()
+    }
+
+    /// `index`: 0 the dictation hotkey, 1 the fix hotkey, 2 the review hotkey.
+    private func keyMatched(_ index: Int, _ match: KeyMatch, at time: Double) {
+        if index == 1 { return fixKeyMatched(match, at: time) }
+        if index == 2 {
+            if match == .bindingDown { openReview() }
+            return
+        }
         switch match {
         case .bindingDown: apply(gesture.keyDown(at: time))
         case .bindingUp: apply(gesture.keyUp(at: time))
@@ -124,6 +147,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             lastText = record.text
             lastRecord = record
             if settings.learnFromEdits { editWatcher.watch(record) }
+        } else if record.fixes != nil, let text = record.text {
+            // A fix that could not be typed: offer it under "Copy last".
+            lastText = text
         }
     }
 
@@ -223,9 +249,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             menu.addItem(withTitle: "Copy last: \(shown)", action: #selector(copyLast), keyEquivalent: "").target = self
         }
         if lastRecord != nil {
-            menu.addItem(withTitle: "That Was Wrong…", action: #selector(flagLast), keyEquivalent: "").target = self
+            let item = menu.addItem(withTitle: "That Was Wrong…", action: #selector(flagLast), keyEquivalent: "")
+            item.target = self
+            if let key = settings.fixBinding { item.toolTip = "Tap \(key.displayName) to type the fix, hold it to say it again" }
         }
-        menu.addItem(withTitle: "Review Dictations…", action: #selector(openReview), keyEquivalent: "").target = self
+        let count = autoReviewer.pending?.proposals.count ?? 0
+        menu.addItem(withTitle: count > 0 ? "Review Dictations (\(count) suggestion\(count == 1 ? "" : "s"))…" : "Review Dictations…",
+                     action: #selector(openReview), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Open Dictation Log", action: #selector(openLog), keyEquivalent: "").target = self
@@ -242,31 +272,90 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         NSPasteboard.general.setString(lastText, forType: .string)
     }
 
-    /// Asks what the last dictation should have said, and keeps the answer for the review.
+    /// Asks what the last dictation should have said, keeps the answer for the review, and fixes the text in
+    /// place when the field still holds it as typed.
     @objc private func flagLast() {
-        guard let record = lastRecord else { return }
-        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 90))
-        editor.string = record.text ?? ""
-        editor.font = .systemFont(ofSize: NSFont.systemFontSize)
-        editor.isRichText = false
-        editor.isAutomaticQuoteSubstitutionEnabled = false
-        let scroll = NSScrollView(frame: editor.frame)
-        scroll.documentView = editor
-        scroll.hasVerticalScroller = true
-        scroll.borderType = .bezelBorder
+        guard let record = lastRecord, !session.isRecording, correctionBox?.isOpen != true else { return }
+        let front = NSWorkspace.shared.frontmostApplication?.bundleIdentifier
+        // Typing in the box is not typing in the field, and must not trigger a hotkey.
+        listener?.paused = true
+        correctionBox = CorrectionBox.show(for: record) { [weak self] answer in
+            guard let self else { return }
+            self.listener?.paused = self.settings.capturingShortcut
+            self.correctionBox = nil
+            guard let answer else { return }
+            let feedback = Feedback(flagging: record, correction: answer)
+            self.saveFeedback(feedback)
+            guard let corrected = feedback.correctedText, record.app == nil || record.app == front else { return }
+            // Keyboard focus is back in the field once the panel is gone.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.editWatcher.cancel()
+                if self.session.correctLast(corrected) {
+                    self.lastText = corrected
+                    self.lastRecord?.text = corrected
+                }
+            }
+        }
+    }
 
-        let alert = NSAlert()
-        alert.messageText = "What should it have said?"
-        alert.informativeText = "Fix the text below to what you meant, or leave it as typed to just flag it. "
-            + "You said: \u{201C}\(record.rawText ?? "")\u{201D}"
-        alert.accessoryView = scroll
-        alert.addButton(withTitle: "Save")
-        alert.addButton(withTitle: "Cancel")
-        NSApp.activate(ignoringOtherApps: true)
-        alert.window.initialFirstResponder = editor
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        feedbackLog.append(Feedback(flagging: record, correction: editor.string))
-        lastRecord = nil
+    private func saveFeedback(_ feedback: Feedback) {
+        feedbackLog.append(feedback)
+        autoReviewer.check()
+    }
+
+    // MARK: fix hotkey
+
+    private func fixKeyMatched(_ match: KeyMatch, at time: Double) {
+        switch match {
+        case .bindingDown: applyFix(fixGesture.keyDown(at: time))
+        case .bindingUp: applyFix(fixGesture.keyUp(at: time))
+        case .otherKey: applyFix(fixGesture.otherKey(at: time))
+        case .ignore: break
+        }
+    }
+
+    private func applyFix(_ actions: [FixAction]) {
+        for action in actions {
+            switch action {
+            case .start:
+                guard !session.isRecording, lastRecord != nil else { continue }
+                fixRecording = true
+                session.handle(.start, fix: true)
+                cues.play(.microphoneOn)
+            case .finish:
+                guard fixRecording else { continue }
+                fixRecording = false
+                session.handle(.finish)
+                cues.play(.microphoneOff)
+            case .cancel:
+                guard fixRecording else { continue }
+                fixRecording = false
+                session.handle(.cancel)
+                cues.play(.cancelled)
+            case .openBox:
+                if !session.isRecording { flagLast() }
+            }
+        }
+        fixTimer?.invalidate()
+        fixTimer = nil
+        guard let deadline = fixGesture.deadline else { return }
+        let delay = max(0, deadline - ProcessInfo.processInfo.systemUptime)
+        fixTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                guard let self else { return }
+                self.applyFix(self.fixGesture.tick(at: ProcessInfo.processInfo.systemUptime))
+            }
+        }
+    }
+
+    // MARK: notifications
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification) async -> UNNotificationPresentationOptions {
+        [.banner, .sound]
+    }
+
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse) async {
+        await MainActor.run { self.openReview() }
     }
 
     @objc private func openLog() {
@@ -308,7 +397,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }()
         window.contentViewController = NSHostingController(rootView: ReviewView(model: model) { [weak window] in window?.close() })
         reviewWindow = window
-        model.start(all: CommandLine.arguments.contains("--all"))
+        if let outcome = autoReviewer.taken() {
+            model.show(outcome)
+        } else {
+            model.start(all: CommandLine.arguments.contains("--all"))
+        }
         NSApp.activate(ignoringOtherApps: true)
         window.center()
         window.makeKeyAndOrderFront(nil)

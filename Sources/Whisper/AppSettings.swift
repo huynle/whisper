@@ -31,6 +31,12 @@ final class AppSettings: ObservableObject {
     private let transport = URLSessionTransport()
 
     @Published var binding: HotkeyBinding { didSet { save(binding, "binding") } }
+    /// Hold to say the last dictation again, tap to type the correction; nil when not set.
+    @Published var fixBinding: HotkeyBinding? { didSet { saveOptional(fixBinding, "fixBinding") } }
+    /// Opens Review Dictations; nil (the default) when not set.
+    @Published var reviewBinding: HotkeyBinding? { didSet { saveOptional(reviewBinding, "reviewBinding") } }
+    /// Review the log in the background and post a notification when there are suggestions.
+    @Published var autoReview: Bool { didSet { defaults.set(autoReview, forKey: "autoReview") } }
     @Published var baseURL: String { didSet { defaults.set(baseURL, forKey: "baseURL") } }
     @Published var model: String { didSet { defaults.set(model, forKey: "model") } }
     @Published var language: String { didSet { defaults.set(language, forKey: "language") } }
@@ -55,6 +61,9 @@ final class AppSettings: ObservableObject {
 
     init() {
         binding = (defaults.data(forKey: "binding")).flatMap { try? JSONDecoder().decode(HotkeyBinding.self, from: $0) } ?? .rightOption
+        fixBinding = Self.optionalBinding(defaults, "fixBinding", default: .rightCommand)
+        reviewBinding = Self.optionalBinding(defaults, "reviewBinding", default: nil)
+        autoReview = defaults.object(forKey: "autoReview") as? Bool ?? true
         baseURL = defaults.string(forKey: "baseURL") ?? Self.defaultBaseURL
         model = defaults.string(forKey: "model") ?? Self.defaultModel
         language = defaults.string(forKey: "language") ?? "en"
@@ -91,6 +100,16 @@ final class AppSettings: ObservableObject {
     func makeCleaner(model: String) -> Cleaner {
         let key = apiKey
         return OpenAIChatCleaner(baseURL: URL(string: baseURL) ?? URL(string: Self.defaultBaseURL)!, model: model, apiKey: { key }, transport: transport)
+    }
+
+    /// Stored as empty data once the user clears it, so the default does not come back.
+    private static func optionalBinding(_ defaults: UserDefaults, _ key: String, default value: HotkeyBinding?) -> HotkeyBinding? {
+        guard let data = defaults.data(forKey: key) else { return value }
+        return try? JSONDecoder().decode(HotkeyBinding.self, from: data)
+    }
+
+    private func saveOptional(_ value: HotkeyBinding?, _ key: String) {
+        defaults.set(value.flatMap { try? JSONEncoder().encode($0) } ?? Data(), forKey: key)
     }
 
     private func save(_ value: HotkeyBinding, _ key: String) {

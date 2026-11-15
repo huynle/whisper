@@ -3,8 +3,9 @@ import Foundation
 /// The user saying a dictation came out wrong, and what it should have been. Kept in feedback.jsonl beside the
 /// dictation log, for the review that proposes dictionary and prompt changes.
 public struct Feedback: Codable, Equatable, Sendable {
-    /// `flagged`: from the menu. `edited`: the user's own correction, seen in the field after typing.
-    public enum Source: String, Codable, Sendable { case flagged, edited }
+    /// `flagged`: typed in the correction box. `edited`: the user's own correction, seen in the field after
+    /// typing. `resaid`: said again with the fix hotkey.
+    public enum Source: String, Codable, Sendable { case flagged, edited, resaid }
 
     public var id = UUID().uuidString
     public var date = Date()

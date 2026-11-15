@@ -33,6 +33,13 @@ final class EditWatcher {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) { [weak self] in self?.begin(record, typed: text) }
     }
 
+    /// Ends the current watch without reporting anything (Whisper itself is about to change the text).
+    func cancel() {
+        timer?.invalidate()
+        timer = nil
+        watch = nil
+    }
+
     /// Ends the current watch now, reporting a correction if there is one (a new dictation is starting).
     func finish() {
         timer?.invalidate()
