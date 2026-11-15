@@ -1,6 +1,7 @@
 import AppKit
 import AVFoundation
 import DictationCore
+import ServiceManagement
 import SwiftUI
 
 struct SettingsView: View {
@@ -32,10 +33,31 @@ struct GeneralSettingsView: View {
     @State private var monitor: Any?
     @State private var capture = ShortcutCapture()
     @State private var permissions = Permissions.current()
+    @State private var openAtLogin = LoginItem.isEnabled
+    @State private var loginMessage: String?
     private let refresh = Timer.publish(every: 2, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
+            Section("Startup") {
+                Toggle("Open Whisper at login", isOn: Binding(
+                    get: { openAtLogin },
+                    set: { wanted in
+                        loginMessage = LoginItem.set(wanted).map { "Could not change it: \($0)" }
+                        openAtLogin = LoginItem.isEnabled
+                    }))
+                if LoginItem.needsApproval {
+                    Button("Allow in Login Items…") { SMAppService.openSystemSettingsLoginItems() }
+                }
+                if !LoginItem.isInstalled {
+                    Text("This copy runs from \(Bundle.main.bundleURL.deletingLastPathComponent().path). Install it with scripts/install.sh so the login item points to a copy that stays put.")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+                if let loginMessage {
+                    Text(loginMessage).font(.caption).foregroundStyle(.orange)
+                }
+            }
+
             Section("Hotkey") {
                 HStack {
                     Text("Dictate with")
@@ -99,7 +121,10 @@ struct GeneralSettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .onReceive(refresh) { _ in permissions = Permissions.current() }
+        .onReceive(refresh) { _ in
+            permissions = Permissions.current()
+            openAtLogin = LoginItem.isEnabled
+        }
         .onDisappear { stopCapture() }
     }
 

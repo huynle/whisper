@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var subscriptions = Set<AnyCancellable>()
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        LoginItem.enableOnFirstInstalledLaunch()
         listener = HotkeyListener(binding: settings.binding) { [weak self] match, time in
             MainActor.assumeIsolated { self?.keyMatched(match, at: time) }
         }
