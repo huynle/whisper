@@ -9,6 +9,9 @@ import UniformTypeIdentifiers
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let settings = AppSettings()
     private let log = DictationLog()
+    private let feedbackLog = DictationLog(fileName: "feedback.jsonl")
+    /// The last dictation typed, for "That Was Wrong…".
+    private var lastRecord: DictationRecord?
     private let gesture = HotkeyGesture()
     private let recorder = MicRecorder()
     private let cues = CuePlayer()
@@ -25,6 +28,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         LoginItem.enableOnFirstInstalledLaunch()
+        lastRecord = log.lastTyped()
+        lastText = lastRecord?.text
         listener = HotkeyListener(binding: settings.binding) { [weak self] match, time in
             MainActor.assumeIsolated { self?.keyMatched(match, at: time) }
         }
@@ -70,6 +75,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else if !settings.hasAPIKey {
             openSettings()
         }
+        // `--flag-last` opens "That Was Wrong…" for the last dictation at launch.
+        if CommandLine.arguments.contains("--flag-last") {
+            DispatchQueue.main.async { self.flagLast() }
+        }
     }
 
     // MARK: hotkey to session
@@ -105,7 +114,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func recorded(_ record: DictationRecord) {
         log.append(record)
-        if record.outcome == .typed { lastText = record.text }
+        if record.outcome == .typed {
+            lastText = record.text
+            lastRecord = record
+        }
     }
 
     /// The profile for the app in front (or the one chosen in the menu), with its dictionary and clean-up engine.
@@ -114,7 +126,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let profile = store.profiles.profile(forApp: app, override: settings.profileOverride)
         return DictationContext(
             profile: profile, dictionary: store.dictionary,
-            cleaner: profile.cleanupModel.map { settings.makeCleaner(model: $0) })
+            cleaner: profile.cleanupModel.map { settings.makeCleaner(model: $0) }, app: app)
     }
 
     // MARK: permissions
@@ -203,6 +215,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let shown = lastText.count > 50 ? String(lastText.prefix(50)) + "…" : lastText
             menu.addItem(withTitle: "Copy last: \(shown)", action: #selector(copyLast), keyEquivalent: "").target = self
         }
+        if lastRecord != nil {
+            menu.addItem(withTitle: "That Was Wrong…", action: #selector(flagLast), keyEquivalent: "").target = self
+        }
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Open Dictation Log", action: #selector(openLog), keyEquivalent: "").target = self
@@ -217,6 +232,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard let lastText else { return }
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(lastText, forType: .string)
+    }
+
+    /// Asks what the last dictation should have said, and keeps the answer for the review.
+    @objc private func flagLast() {
+        guard let record = lastRecord else { return }
+        let editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 90))
+        editor.string = record.text ?? ""
+        editor.font = .systemFont(ofSize: NSFont.systemFontSize)
+        editor.isRichText = false
+        editor.isAutomaticQuoteSubstitutionEnabled = false
+        let scroll = NSScrollView(frame: editor.frame)
+        scroll.documentView = editor
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+
+        let alert = NSAlert()
+        alert.messageText = "What should it have said?"
+        alert.informativeText = "Fix the text below to what you meant, or leave it as typed to just flag it. "
+            + "You said: \u{201C}\(record.rawText ?? "")\u{201D}"
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        NSApp.activate(ignoringOtherApps: true)
+        alert.window.initialFirstResponder = editor
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        feedbackLog.append(Feedback(flagging: record, correction: editor.string))
+        lastRecord = nil
     }
 
     @objc private func openLog() {

@@ -60,8 +60,8 @@ public struct DictationRecord: Codable, Sendable {
     public var cleanedText: String?
     /// Why the clean-up was not typed: it strayed from what was said (`CleanupGuard`).
     public var cleanupRejected: String?
-    /// The user marked this dictation as wrong.
-    public var flagged: Bool?
+    /// The bundle identifier of the app it was dictated into.
+    public var app: String?
 }
 
 /// Runs dictations from hotkey actions: records, drops presses without speech, transcribes, cleans up per the
@@ -204,6 +204,7 @@ public final class DictationSession {
             audioSeconds: Double(recording.samples.count) / Double(recording.sampleRate),
             micStartSeconds: recording.micStartSeconds,
             profile: context.profile.name)
+        record.app = context.app
 
         let wav = WAV.encode(recording.samples, sampleRate: recording.sampleRate)
         if let saveAudio { record.audioFile = saveAudio(wav, record.id) }

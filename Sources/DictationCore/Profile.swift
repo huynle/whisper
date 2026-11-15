@@ -222,11 +222,14 @@ public struct DictationContext: Sendable {
     public var dictionary: UserDictionary
     /// nil: no clean-up, the speech model's text is typed as it is.
     public var cleaner: Cleaner?
+    /// The bundle identifier of the app in front.
+    public var app: String?
 
-    public init(profile: Profile, dictionary: UserDictionary, cleaner: Cleaner?) {
+    public init(profile: Profile, dictionary: UserDictionary, cleaner: Cleaner?, app: String? = nil) {
         self.profile = profile
         self.dictionary = dictionary
         self.cleaner = cleaner
+        self.app = app
     }
 
     /// No profile settings at all: the speech model's text, typed as it is.
