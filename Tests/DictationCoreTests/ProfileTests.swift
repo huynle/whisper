@@ -117,3 +117,25 @@ import Testing
         #expect(CleanupPrompt.system(for: profile, dictionary: dictionary).hasSuffix("Sign off with Best, Huy."))
     }
 }
+
+@Suite struct CleanupPromptFidelityTests {
+    private let dictionary = UserDictionary(entries: [])
+
+    @Test func everyProfileIsToldToKeepTheWholeMessageAndItsKind() {
+        for profile in ProfileSet.defaults.profiles where profile.correctness != .polished {
+            let prompt = CleanupPrompt.system(for: profile, dictionary: dictionary)
+            #expect(prompt.contains("Never summarise or shorten"), "\(profile.name)")
+            #expect(prompt.contains("a question stays a question"), "\(profile.name)")
+        }
+    }
+
+    @Test func lightPunctuationKeepsQuestionMarks() {
+        let coding = ProfileSet.defaults.profiles[0]
+        #expect(CleanupPrompt.system(for: coding, dictionary: dictionary).contains("keep question marks"))
+    }
+
+    @Test func codingWritesCommandsOnlyWhenDictated() {
+        let coding = ProfileSet.defaults.profiles[0]
+        #expect(CleanupPrompt.system(for: coding, dictionary: dictionary).contains("only when the speaker dictates one"))
+    }
+}

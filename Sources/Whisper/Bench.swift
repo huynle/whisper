@@ -76,6 +76,11 @@ enum Bench {
                             do {
                                 let cleaned = try await cleaner.clean(raw, instructions: instructions)
                                 print(String(format: "     clean-up %5.0f ms  ", Date().timeIntervalSince(cleanStart) * 1_000) + cleaned.text)
+                                let repaired = CleanupGuard.repair(raw: raw, cleaned: cleaned.text, profile: profile)
+                                if repaired != cleaned.text { print("     repaired: " + repaired) }
+                                if let problem = CleanupGuard.problem(raw: raw, cleaned: repaired, profile: profile, dictionary: dictionary) {
+                                    print("     REJECTED (\(problem)): the spoken words would be typed")
+                                }
                             } catch {
                                 print("     clean-up failed: \(error)")
                             }

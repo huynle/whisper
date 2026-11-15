@@ -199,4 +199,53 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
         #expect(field.text == "hello ")
         #expect(records.value.first?.cleanupModel == nil)
     }
+
+    @Test func aCleanupThatChangesTheMeaningIsNotTyped() async throws {
+        let s = session(profile(.waitForClean))
+        let said = "can you move the meeting to Thursday please?"
+        await dictate(s, number: 0, says: said)
+        await cleaner.waitFor(said)
+        cleaner.answer(said, with: .success("Sure, I moved the meeting to Thursday."))
+        await s.settle()
+        #expect(field.text == said)
+        let record = try #require(records.value.first)
+        #expect(record.text == said)
+        #expect(record.cleanedText == "Sure, I moved the meeting to Thursday.")
+        #expect(record.cleanupRejected?.hasPrefix("Dropped") == true)
+    }
+
+    @Test func rawThenFixKeepsTheSpokenWordsWhenTheCleanupStrays() async throws {
+        let s = session(profile(.rawThenFix))
+        let said = "can you move the meeting to Thursday please?"
+        await dictate(s, number: 0, says: said)
+        await cleaner.waitFor(said)
+        await waitUntil { field.text == said }
+        cleaner.answer(said, with: .success("Sure, I moved the meeting to Thursday."))
+        await s.settle()
+        #expect(field.text == said)
+        let record = try #require(records.value.first)
+        #expect(record.revised == false)
+        #expect(record.cleanedText == "Sure, I moved the meeting to Thursday.")
+        #expect(record.cleanupRejected?.hasPrefix("Dropped") == true)
+    }
+
+    @Test func theCleanedTextIsLoggedWhenItIsUsed() async throws {
+        let s = session(profile(.waitForClean))
+        await dictate(s, number: 0, says: "hello")
+        await cleaner.waitFor("hello")
+        cleaner.answer("hello", with: .success("Hello."))
+        await s.settle()
+        #expect(records.value.first?.cleanedText == "Hello.")
+        #expect(records.value.first?.cleanupRejected == nil)
+    }
+
+    @Test func aDroppedQuestionMarkIsPutBack() async throws {
+        let s = session(profile(.waitForClean))
+        await dictate(s, number: 0, says: "Is that a good pattern?")
+        await cleaner.waitFor("Is that a good pattern?")
+        cleaner.answer("Is that a good pattern?", with: .success("is that a good pattern"))
+        await s.settle()
+        #expect(field.text == "is that a good pattern?")
+        #expect(records.value.first?.cleanupRejected == nil)
+    }
 }

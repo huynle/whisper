@@ -56,6 +56,12 @@ public struct DictationRecord: Codable, Sendable {
     public var cleanupError: String?
     /// Raw-then-fix: whether the raw text was corrected in place.
     public var revised: Bool?
+    /// What the clean-up model answered, whether or not it was typed.
+    public var cleanedText: String?
+    /// Why the clean-up was not typed: it strayed from what was said (`CleanupGuard`).
+    public var cleanupRejected: String?
+    /// The user marked this dictation as wrong.
+    public var flagged: Bool?
 }
 
 /// Runs dictations from hotkey actions: records, drops presses without speech, transcribes, cleans up per the
@@ -251,9 +257,35 @@ public final class DictationSession {
         let instructions = CleanupPrompt.system(for: context.profile, dictionary: context.dictionary)
         let limit = context.profile.typing == .waitForClean ? cleanupTimeout : revisionTimeout
         tasks.append(Task {
-            let result = await Self.clean(raw, with: cleaner, instructions: instructions, limit: limit)
+            var result = await Self.clean(raw, with: cleaner, instructions: instructions, limit: limit)
+            if case .success(var cleaned) = result {
+                let answered = cleaned
+                cleaned.text = CleanupGuard.repair(raw: raw, cleaned: cleaned.text, profile: context.profile)
+                if let reason = CleanupGuard.problem(raw: raw, cleaned: cleaned.text, profile: context.profile, dictionary: context.dictionary) {
+                    result = .failure(CleanupRejected(reason: reason, cleaned: answered))
+                } else {
+                    result = .success(cleaned)
+                }
+            }
             self.cleaned(result, for: id)
         })
+    }
+
+    /// A clean-up that answered but strayed from what was said; the spoken words are typed instead.
+    private struct CleanupRejected: Error {
+        let reason: String
+        let cleaned: Transcription
+    }
+
+    /// Notes a failed or rejected clean-up in the record.
+    private static func note(_ error: Error, in record: inout DictationRecord) {
+        if let rejected = error as? CleanupRejected {
+            record.cleanedText = rejected.cleaned.text
+            record.cleanup = rejected.cleaned.timing
+            record.cleanupRejected = rejected.reason
+        } else {
+            record.cleanupError = message(error)
+        }
     }
 
     private struct CleanupTimeout: Error, CustomStringConvertible {
@@ -294,10 +326,11 @@ public final class DictationSession {
         var record = waiting.record
         switch result {
         case .failure(let error):
-            record.cleanupError = Self.message(error)
+            Self.note(error, in: &record)
             record.revised = false
         case .success(let transcription):
             record.cleanup = transcription.timing
+            record.cleanedText = transcription.text
             let target = transcription.text + (waiting.trailingSpace ? " " : "")
             if lastTyped?.id != id {
                 record.revised = false
@@ -361,8 +394,9 @@ public final class DictationSession {
         case .done(.success(let transcription)):
             text = transcription.text
             record.cleanup = transcription.timing
+            record.cleanedText = transcription.text
         case .done(.failure(let error)):
-            record.cleanupError = Self.message(error)
+            Self.note(error, in: &record)
         }
 
         let trailingSpace = pending.context.profile.trailingSpace
