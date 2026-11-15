@@ -431,4 +431,18 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
         await s.settle()
         #expect(field.text == "Hello.")
     }
+
+    @Test func aRewriteThatChangesNothingSaysSo() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "hello", cleaned: "hello")
+        await instruct(s, number: 1, says: "lowercase please")
+        let request = RewritePrompt.user(text: "hello", instruction: "lowercase please")
+        await cleaner.waitFor(request)
+        #expect(s.status == .rewriting)
+        cleaner.answer(request, with: .success("hello"))
+        await s.settle()
+        #expect(field.text == "hello")
+        #expect(s.status == .failed("No change: the rewrite came back the same"))
+        #expect(corrections.value.isEmpty)
+    }
 }

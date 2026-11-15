@@ -19,6 +19,8 @@ final class HotkeyListener {
     private let onMatch: (Int, KeyMatch, Double) -> Void
     /// A mouse click anywhere: the user may have moved the cursor, so typed text must not be corrected.
     var onClick: (() -> Void)?
+    /// Every modifier key change (key code, flags), before the hotkeys it matches.
+    var onModifier: ((UInt16, UInt64, Double) -> Void)?
     private let ownProcess = Int64(getpid())
 
     init(bindings: [HotkeyBinding?], onMatch: @escaping (Int, KeyMatch, Double) -> Void) {
@@ -75,6 +77,10 @@ final class HotkeyListener {
         }
 
         let (matches, swallow) = router.handle(input)
+        if case .flagsChanged = input, let onModifier {
+            let time = ProcessInfo.processInfo.systemUptime
+            DispatchQueue.main.async { onModifier(keyCode, flags, time) }
+        }
         if !matches.isEmpty {
             let time = ProcessInfo.processInfo.systemUptime
             // Return to macOS at once; starting the microphone can take long enough for the tap to be switched off.

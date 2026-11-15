@@ -3,6 +3,8 @@ import Foundation
 /// Short sounds that say what the microphone is doing, since nothing on screen does while the user talks.
 public enum Cue: CaseIterable, Sendable {
     case microphoneOn, locked, microphoneOff, cancelled, failed
+    /// The recording became a fix (Shift added) or an instruction (Command added).
+    case fixMode, instructionMode
 
     public static func `for`(_ action: GestureAction) -> Cue {
         switch action {
@@ -31,6 +33,8 @@ public enum Cue: CaseIterable, Sendable {
         case .microphoneOff: [.note(hz: 660, ms: 50)]
         case .cancelled: [.note(hz: 523, ms: 40), .gap(ms: 30), .note(hz: 392, ms: 40)]
         case .failed: [.note(hz: 294, ms: 150)]
+        case .fixMode: [.note(hz: 988, ms: 35), .gap(ms: 25), .note(hz: 988, ms: 35)]
+        case .instructionMode: [.note(hz: 784, ms: 35), .gap(ms: 20), .note(hz: 988, ms: 35), .gap(ms: 20), .note(hz: 1_319, ms: 45)]
         }
     }
 

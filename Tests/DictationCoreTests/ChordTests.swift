@@ -9,7 +9,8 @@ private let both = option | shift | rightOptionBit | rightShiftBit
 
 @Suite struct ChordBindingTests {
     @Test func itIsNamedByBothKeys() {
-        #expect(HotkeyBinding.rightOptionRightShift.displayName == "Right Option + Right Shift")
+        #expect(HotkeyBinding.rightOptionRightShift.displayName == "Right Option + Shift")
+        #expect(HotkeyBinding.rightOptionRightCommand.displayName == "Right Option + Command")
         #expect(HotkeyBinding.rightOptionRightShift.isModifierOnly)
     }
 
@@ -28,9 +29,19 @@ private let both = option | shift | rightOptionBit | rightShiftBit
         #expect(m.handle(.flagsChanged(keyCode: 61, flags: shift | rightShiftBit)) == .bindingUp)
     }
 
-    @Test func leftShiftDoesNotCount() {
+    @Test func theAddedKeyMayBeEitherSide() {
         var m = BindingMatcher(binding: .rightOptionRightShift)
-        #expect(m.handle(.flagsChanged(keyCode: 56, flags: option | shift | rightOptionBit | 0x02)) == .ignore)
+        #expect(m.handle(.flagsChanged(keyCode: 56, flags: option | shift | rightOptionBit | 0x02)) == .bindingDown)
+        #expect(m.handle(.flagsChanged(keyCode: 56, flags: option | rightOptionBit)) == .bindingUp)
+        var r = BindingMatcher(binding: .rightOptionRightCommand)
+        #expect(r.handle(.flagsChanged(keyCode: 61, flags: option | rightOptionBit)) == .ignore)
+        #expect(r.handle(.flagsChanged(keyCode: 55, flags: option | rightOptionBit | 0x100000 | 0x08)) == .bindingDown)
+        #expect(r.handle(.flagsChanged(keyCode: 55, flags: option | rightOptionBit)) == .bindingUp)
+    }
+
+    @Test func theFirstKeyMustBeTheExactSide() {
+        var m = BindingMatcher(binding: .rightOptionRightShift)
+        #expect(m.handle(.flagsChanged(keyCode: 58, flags: option | shift | 0x20 | rightShiftBit)) == .ignore)
     }
 
     @Test func oldSettingsStillLoad() throws {

@@ -35,7 +35,11 @@ public struct HotkeyBinding: Codable, Equatable, Sendable {
     }
 
     public var displayName: String {
-        if isModifierOnly { return keys.compactMap { ModifierKey.named[$0]?.name }.joined(separator: " + ") }
+        if isModifierOnly, let first = ModifierKey.named[keyCode]?.name {
+            // The added key counts on either side, so it is named without one.
+            guard let second = secondKeyCode.flatMap({ ModifierKey.named[$0]?.name }) else { return first }
+            return first + " + " + second.replacingOccurrences(of: "Left ", with: "").replacingOccurrences(of: "Right ", with: "")
+        }
         let symbols = ModifierKey.symbols.filter { modifiers & $0.flag != 0 }.map(\.symbol).joined()
         return symbols + (KeyNames.name(for: keyCode) ?? "Key \(keyCode)")
     }
@@ -64,6 +68,12 @@ enum ModifierKey {
     static let symbols: [(flag: UInt64, symbol: String)] = [
         (0x40000, "⌃"), (0x80000, "⌥"), (0x20000, "⇧"), (0x100000, "⌘"),
     ]
+
+    /// The key and its twin on the other side (Left and Right Command); Fn has no twin.
+    static func bothSides(_ keyCode: UInt16) -> [UInt16] {
+        let pairs: [[UInt16]] = [[54, 55], [56, 60], [58, 61], [59, 62]]
+        return pairs.first { $0.contains(keyCode) } ?? [keyCode]
+    }
 
     static let comboMask: UInt64 = symbols.reduce(0) { $0 | $1.flag }
 }
@@ -129,9 +139,13 @@ public struct BindingMatcher {
     private mutating func matchModifier(_ input: KeyInput) -> KeyMatch {
         switch input {
         case .flagsChanged(let keyCode, let flags):
-            let keys = binding.keys
-            guard keys.contains(keyCode) else { return .ignore }
-            let down = keys.allSatisfy { key in ModifierKey.named[key].map { flags & $0.deviceBit != 0 } ?? false }
+            // The first key is matched on its side; an added second key on either side (Right Option with the
+            // left or right Command), since the two are easy to mix up.
+            let first = binding.keyCode
+            let second = binding.secondKeyCode.map(ModifierKey.bothSides) ?? []
+            guard keyCode == first || second.contains(keyCode) else { return .ignore }
+            let isHeld = { (key: UInt16) in ModifierKey.named[key].map { flags & $0.deviceBit != 0 } ?? false }
+            let down = isHeld(first) && (second.isEmpty || second.contains(where: isHeld))
             if down == isDown { return .ignore }
             isDown = down
             return down ? .bindingDown : .bindingUp

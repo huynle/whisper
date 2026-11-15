@@ -66,6 +66,8 @@ public struct DictationRecord: Codable, Sendable {
     public var fixes: String?
     /// A rewrite: the instruction it followed.
     public var instruction: String?
+    /// Developer mode: the modifier keys pressed and released during the press (`KeyTrace`).
+    public var keys: [String]?
 }
 
 /// Runs dictations from hotkey actions: records, drops presses without speech, transcribes, cleans up per the
@@ -77,6 +79,8 @@ public final class DictationSession {
         case idle
         case recording(locked: Bool)
         case transcribing
+        /// A model is rewriting the last dictation by an instruction.
+        case rewriting
         /// The last dictation failed; cleared by the next one.
         case failed(String)
     }
@@ -147,6 +151,9 @@ public final class DictationSession {
 
     /// The longest a waiting profile waits for clean-up before typing the raw text.
     public var cleanupTimeout: Double = 2.5
+    /// Developer mode: the keys of the current press, copied into the record when it finishes or is cancelled.
+    public var keyTrace: [String]?
+
     /// The longest a rewrite may take.
     public var rewriteTimeout: Double = 8
     /// The longest a raw-then-fix correction may arrive after the raw text.
@@ -189,7 +196,9 @@ public final class DictationSession {
             guard let since = recordingSince else { return }
             recordingSince = nil
             recorder.discard()
-            onRecord(DictationRecord(outcome: .cancelled, recordingSeconds: now() - since, profile: recordingContext?.profile.name))
+            var record = DictationRecord(outcome: .cancelled, recordingSeconds: now() - since, profile: recordingContext?.profile.name)
+            record.keys = keyTrace
+            onRecord(record)
         case .finish:
             guard let since = recordingSince else { return }
             recordingSince = nil
@@ -269,6 +278,7 @@ public final class DictationSession {
             micStartSeconds: recording.micStartSeconds,
             profile: context.profile.name)
         record.app = context.app
+        record.keys = keyTrace
 
         let wav = WAV.encode(recording.samples, sampleRate: recording.sampleRate)
         if let saveAudio { record.audioFile = saveAudio(wav, record.id) }
@@ -529,6 +539,10 @@ public final class DictationSession {
         guard let last = lastTyped, last.id == base else {
             return fail("Not rewritten: another dictation was typed meanwhile")
         }
+        if rewritten.text == last.record.text {
+            record.text = rewritten.text
+            return fail("No change: the rewrite came back the same")
+        }
         dropRevision(of: last.id, because: "Replaced by a rewrite")
         record.cleanup = rewritten.timing
         record.text = rewritten.text
@@ -585,6 +599,8 @@ public final class DictationSession {
     private func updateStatus() {
         if recordingSince != nil {
             status = .recording(locked: locked)
+        } else if queue.contains(where: { $0.purpose == .rewrite }) {
+            status = .rewriting
         } else if !queue.isEmpty {
             status = .transcribing
         } else if let lastFailure {

@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private let pad = HotkeyPad(extendsDictationKey: [:])
     /// What the recording running now was started or turned into, when it acts on the last dictation.
     private var actingOnLast: DictationPurpose?
+    private var keyTrace = KeyTrace()
     private var correctionBox: CorrectionBox?
     private lazy var autoReviewer = AutoReviewer(settings: settings, store: store)
     private let recorder = MicRecorder()
@@ -62,6 +63,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         show(.idle)
 
         listener?.onClick = { [weak self] in self?.interfered() }
+        listener?.onModifier = { [weak self] keyCode, flags, time in
+            MainActor.assumeIsolated {
+                guard let self, self.settings.developerMode else { return }
+                self.keyTrace.add(keyCode: keyCode, flags: flags, at: time)
+                self.session.keyTrace = self.keyTrace.entries
+            }
+        }
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] _ in
@@ -133,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             case .upgrade(let purpose):
                 actingOnLast = purpose
                 session.mark(purpose)
-                cues.play(.locked)
+                cues.play(purpose == .rewrite ? .instructionMode : .fixMode)
             case .finish:
                 guard actingOnLast != nil else { continue }
                 actingOnLast = nil
@@ -229,6 +237,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             case .recording(locked: false): return ("mic.fill", .systemRed)
             case .recording(locked: true): return ("mic.circle.fill", .systemRed)
             case .transcribing: return ("ellipsis.circle", nil)
+            case .rewriting: return ("wand.and.stars", .systemPurple)
             case .failed: return ("exclamationmark.triangle", .systemOrange)
             }
         }()
