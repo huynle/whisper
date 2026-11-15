@@ -61,7 +61,7 @@ final class AppSettings: ObservableObject {
 
     init() {
         binding = (defaults.data(forKey: "binding")).flatMap { try? JSONDecoder().decode(HotkeyBinding.self, from: $0) } ?? .rightOption
-        fixBinding = Self.optionalBinding(defaults, "fixBinding", default: .rightCommand)
+        fixBinding = Self.optionalBinding(defaults, "fixBinding", default: .rightOptionRightShift)
         reviewBinding = Self.optionalBinding(defaults, "reviewBinding", default: nil)
         autoReview = defaults.object(forKey: "autoReview") as? Bool ?? true
         baseURL = defaults.string(forKey: "baseURL") ?? Self.defaultBaseURL

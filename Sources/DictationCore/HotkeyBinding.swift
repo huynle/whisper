@@ -4,24 +4,36 @@ public struct HotkeyBinding: Codable, Equatable, Sendable {
     public var keyCode: UInt16
     /// Device-independent modifier flags that must be held with the key (Command, Option, Control, Shift).
     public var modifiers: UInt64
+    /// A second modifier key held together with the first (e.g. Right Option + Right Shift); nil for one key.
+    public var secondKeyCode: UInt16?
 
-    public init(keyCode: UInt16, modifiers: UInt64) {
+    public init(keyCode: UInt16, modifiers: UInt64, secondKeyCode: UInt16? = nil) {
         self.keyCode = keyCode
         self.modifiers = modifiers
+        self.secondKeyCode = secondKeyCode
     }
+
+    /// The modifier keys that make up a modifier-only binding.
+    var keys: [UInt16] { [keyCode] + (secondKeyCode.map { [$0] } ?? []) }
 
     /// The first-run default. Wispr Flow defaults to Fn, so this avoids a clash while both run.
     public static let rightOption = HotkeyBinding(keyCode: 61, modifiers: 0)
-    /// The fix hotkey's default.
     public static let rightCommand = HotkeyBinding(keyCode: 54, modifiers: 0)
+    /// The fix hotkey's default: the dictation key with Right Shift added.
+    public static let rightOptionRightShift = HotkeyBinding(keyCode: 61, modifiers: 0, secondKeyCode: 60)
+
+    /// True when this binding is `other` (a single modifier key) with one more modifier key held.
+    public func extends(_ other: HotkeyBinding) -> Bool {
+        isModifierOnly && other.isModifierOnly && other.secondKeyCode == nil && secondKeyCode != nil && keys.contains(other.keyCode)
+    }
 
     /// True for a modifier key used on its own.
     public var isModifierOnly: Bool {
-        modifiers == 0 && ModifierKey.named[keyCode] != nil
+        modifiers == 0 && keys.allSatisfy { ModifierKey.named[$0] != nil }
     }
 
     public var displayName: String {
-        if isModifierOnly, let key = ModifierKey.named[keyCode] { return key.name }
+        if isModifierOnly { return keys.compactMap { ModifierKey.named[$0]?.name }.joined(separator: " + ") }
         let symbols = ModifierKey.symbols.filter { modifiers & $0.flag != 0 }.map(\.symbol).joined()
         return symbols + (KeyNames.name(for: keyCode) ?? "Key \(keyCode)")
     }
@@ -115,8 +127,9 @@ public struct BindingMatcher {
     private mutating func matchModifier(_ input: KeyInput) -> KeyMatch {
         switch input {
         case .flagsChanged(let keyCode, let flags):
-            guard keyCode == binding.keyCode, let bit = ModifierKey.named[keyCode]?.deviceBit else { return .ignore }
-            let down = flags & bit != 0
+            let keys = binding.keys
+            guard keys.contains(keyCode) else { return .ignore }
+            let down = keys.allSatisfy { key in ModifierKey.named[key].map { flags & $0.deviceBit != 0 } ?? false }
             if down == isDown { return .ignore }
             isDown = down
             return down ? .bindingDown : .bindingUp

@@ -335,4 +335,19 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
         #expect(!s.correctLast("cd ~/other"))
         #expect(field.text == "cd ~/projects")
     }
+
+    @Test func aDictationTurnedIntoAFixReplacesTheLastOne() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "cd to projects", cleaned: "cd to projects")
+        s.handle(.start)
+        s.markFix()
+        s.handle(.finish)
+        await transcriber.waitForCalls(2)
+        transcriber.answer(1, with: .success("cd tilde slash projects"))
+        await cleaner.waitFor("cd tilde slash projects")
+        cleaner.answer("cd tilde slash projects", with: .success("cd ~/projects"))
+        await s.settle()
+        #expect(field.text == "cd ~/projects")
+        #expect(corrections.value.first?.correctedText == "cd ~/projects")
+    }
 }

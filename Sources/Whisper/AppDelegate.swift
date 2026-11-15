@@ -13,9 +13,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private let feedbackLog = DictationLog(fileName: "feedback.jsonl")
     /// The last dictation typed, for "That Was Wrong…".
     private var lastRecord: DictationRecord?
-    private let gesture = HotkeyGesture()
-    private let fixGesture = FixGesture()
-    private var fixTimer: Timer?
+    private let pad = HotkeyPad(fixSharesDictationKey: false)
     /// True while a recording started by the fix hotkey runs.
     private var fixRecording = false
     private var correctionBox: CorrectionBox?
@@ -70,7 +68,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             MainActor.assumeIsolated { self?.interfered() }
         }
         Publishers.CombineLatest3(settings.$binding, settings.$fixBinding, settings.$reviewBinding)
-            .sink { [weak self] in self?.listener?.bindings = [$0, $1, $2] }.store(in: &subscriptions)
+            .sink { [weak self] dictate, fix, review in
+                self?.listener?.bindings = [dictate, fix, review]
+                self?.pad.fixSharesDictationKey = fix?.extends(dictate) ?? false
+            }.store(in: &subscriptions)
         settings.$capturingShortcut.sink { [weak self] in self?.listener?.paused = $0 }.store(in: &subscriptions)
         settings.$warmSeconds.sink { [weak self] in self?.recorder.warmSeconds = $0 }.store(in: &subscriptions)
         settings.$cueVolume.sink { [weak self] in self?.cues.volume = $0 }.store(in: &subscriptions)
@@ -108,35 +109,56 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     /// `index`: 0 the dictation hotkey, 1 the fix hotkey, 2 the review hotkey.
     private func keyMatched(_ index: Int, _ match: KeyMatch, at time: Double) {
-        if index == 1 { return fixKeyMatched(match, at: time) }
         if index == 2 {
             if match == .bindingDown { openReview() }
             return
         }
-        switch match {
-        case .bindingDown: apply(gesture.keyDown(at: time))
-        case .bindingUp: apply(gesture.keyUp(at: time))
-        case .otherKey:
-            session.userInput()
-            apply(gesture.otherKey(at: time))
-        case .ignore: break
-        }
+        if index == 0, match == .otherKey { session.userInput() }
+        apply(pad.handle(index, match, at: time))
     }
 
-    private func apply(_ actions: [GestureAction]) {
-        // The microphone first, then the cue, so the cue never delays recording.
+    private func apply(_ actions: [HotkeyPad.Action]) {
         for action in actions {
-            session.handle(action)
-            cues.play(Cue.for(action))
+            switch action {
+            case .dictation(let gestureAction):
+                // The microphone first, then the cue, so the cue never delays recording.
+                session.handle(gestureAction)
+                cues.play(Cue.for(gestureAction))
+                if gestureAction == .finish || gestureAction == .cancel { fixRecording = false }
+            case .fixStart:
+                guard !session.isRecording, lastRecord != nil else { continue }
+                fixRecording = true
+                session.handle(.start, fix: true)
+                cues.play(.microphoneOn)
+            case .fixFromDictation:
+                fixRecording = true
+                session.markFix()
+                cues.play(.locked)
+            case .fixFinish:
+                guard fixRecording else { continue }
+                fixRecording = false
+                session.handle(.finish)
+                cues.play(.microphoneOff)
+            case .fixCancel:
+                guard fixRecording else { continue }
+                fixRecording = false
+                session.handle(.cancel)
+                cues.play(.cancelled)
+            case .fixDiscard:
+                fixRecording = false
+                session.handle(.cancel)
+            case .openBox:
+                if !session.isRecording { flagLast() }
+            }
         }
         gestureTimer?.invalidate()
         gestureTimer = nil
-        guard let deadline = gesture.deadline else { return }
+        guard let deadline = pad.deadline else { return }
         let delay = max(0, deadline - ProcessInfo.processInfo.systemUptime)
         gestureTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
             MainActor.assumeIsolated {
                 guard let self else { return }
-                self.apply(self.gesture.tick(at: ProcessInfo.processInfo.systemUptime))
+                self.apply(self.pad.tick(at: ProcessInfo.processInfo.systemUptime))
             }
         }
     }
@@ -301,51 +323,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private func saveFeedback(_ feedback: Feedback) {
         feedbackLog.append(feedback)
         autoReviewer.check()
-    }
-
-    // MARK: fix hotkey
-
-    private func fixKeyMatched(_ match: KeyMatch, at time: Double) {
-        switch match {
-        case .bindingDown: applyFix(fixGesture.keyDown(at: time))
-        case .bindingUp: applyFix(fixGesture.keyUp(at: time))
-        case .otherKey: applyFix(fixGesture.otherKey(at: time))
-        case .ignore: break
-        }
-    }
-
-    private func applyFix(_ actions: [FixAction]) {
-        for action in actions {
-            switch action {
-            case .start:
-                guard !session.isRecording, lastRecord != nil else { continue }
-                fixRecording = true
-                session.handle(.start, fix: true)
-                cues.play(.microphoneOn)
-            case .finish:
-                guard fixRecording else { continue }
-                fixRecording = false
-                session.handle(.finish)
-                cues.play(.microphoneOff)
-            case .cancel:
-                guard fixRecording else { continue }
-                fixRecording = false
-                session.handle(.cancel)
-                cues.play(.cancelled)
-            case .openBox:
-                if !session.isRecording { flagLast() }
-            }
-        }
-        fixTimer?.invalidate()
-        fixTimer = nil
-        guard let deadline = fixGesture.deadline else { return }
-        let delay = max(0, deadline - ProcessInfo.processInfo.systemUptime)
-        fixTimer = Timer.scheduledTimer(withTimeInterval: delay, repeats: false) { [weak self] _ in
-            MainActor.assumeIsolated {
-                guard let self else { return }
-                self.applyFix(self.fixGesture.tick(at: ProcessInfo.processInfo.systemUptime))
-            }
-        }
     }
 
     // MARK: notifications

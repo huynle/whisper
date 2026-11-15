@@ -191,6 +191,11 @@ public final class DictationSession {
         updateStatus()
     }
 
+    /// The recording running now replaces the last dictation instead of adding to it (Right Shift was added).
+    public func markFix() {
+        if recordingSince != nil { recordingIsFix = true }
+    }
+
     /// True while a recording is running.
     public var isRecording: Bool { recordingSince != nil }
 

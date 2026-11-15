@@ -44,6 +44,17 @@ public final class HotkeyGesture {
         self.timings = timings
     }
 
+    /// True while the key is held at the start of a dictation (not locked).
+    public var isHolding: Bool {
+        if case .holding = state { return true }
+        return false
+    }
+
+    /// The press was taken over (it became a fix): forget it, ignoring the key's release if it is still down.
+    public func abandonPress(keyStillDown: Bool) {
+        state = keyStillDown ? .ignoringRelease : .idle
+    }
+
     /// When `tick` must be called next, or nil when no timer is needed.
     public var deadline: Double? {
         if case .waitingForSecondTap(let until) = state { return until }
