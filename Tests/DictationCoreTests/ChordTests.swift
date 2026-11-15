@@ -50,8 +50,8 @@ private let both = option | shift | rightOptionBit | rightShiftBit
 import Foundation
 
 @Suite struct HotkeyPadTests {
-    /// Right Option dictates; Right Option + Right Shift fixes.
-    private func pad() -> HotkeyPad { HotkeyPad(fixSharesDictationKey: true) }
+    /// Right Option dictates; + Right Shift fixes (index 1); + Right Command rewrites (index 3).
+    private func pad() -> HotkeyPad { HotkeyPad(extendsDictationKey: [1: true, 3: true]) }
 
     @Test func rightOptionAloneDictatesAsBefore() {
         let p = pad()
@@ -62,31 +62,46 @@ import Foundation
     @Test func addingRightShiftTurnsTheRecordingIntoAFix() {
         let p = pad()
         #expect(p.handle(0, .bindingDown, at: 0) == [.dictation(.start)])
-        #expect(p.handle(1, .bindingDown, at: 0.05) == [.fixFromDictation])
-        // Releasing Right Option ends both; the fix finishes, the dictation does not.
+        #expect(p.handle(1, .bindingDown, at: 0.05) == [.upgrade(.fix)])
         #expect(p.handle(0, .bindingUp, at: 2) == [])
-        #expect(p.handle(1, .bindingUp, at: 2) == [.fixFinish])
+        #expect(p.handle(1, .bindingUp, at: 2) == [.finish(.fix)])
     }
 
-    @Test func releasingRightShiftFirstFinishesTheFixAndRightOptionsReleaseDoesNothing() {
+    @Test func addingRightCommandTurnsTheRecordingIntoAnInstruction() {
+        let p = pad()
+        _ = p.handle(0, .bindingDown, at: 0)
+        #expect(p.handle(3, .bindingDown, at: 0.05) == [.upgrade(.rewrite)])
+        #expect(p.handle(0, .bindingUp, at: 2) + p.handle(3, .bindingUp, at: 2) == [.finish(.rewrite)])
+    }
+
+    @Test func theFirstAddedKeyDecides() {
         let p = pad()
         _ = p.handle(0, .bindingDown, at: 0)
         _ = p.handle(1, .bindingDown, at: 0.05)
-        #expect(p.handle(1, .bindingUp, at: 2) == [.fixFinish])
+        #expect(p.handle(3, .bindingDown, at: 0.1) == [])
+        #expect(p.handle(3, .bindingUp, at: 1) == [])
+        #expect(p.handle(1, .bindingUp, at: 2) == [.finish(.fix)])
+    }
+
+    @Test func releasingTheAddedKeyFirstFinishesAndRightOptionsReleaseDoesNothing() {
+        let p = pad()
+        _ = p.handle(0, .bindingDown, at: 0)
+        _ = p.handle(1, .bindingDown, at: 0.05)
+        #expect(p.handle(1, .bindingUp, at: 2) == [.finish(.fix)])
         #expect(p.handle(0, .bindingUp, at: 2.1) == [])
         #expect(p.handle(0, .bindingDown, at: 5) == [.dictation(.start)])
     }
 
-    @Test func pressingBothAtOnceWorksInEitherOrder() {
+    @Test func pressingBothAtOnceWorks() {
         let p = pad()
-        #expect(p.handle(0, .bindingDown, at: 0) + p.handle(1, .bindingDown, at: 0) == [.dictation(.start), .fixFromDictation])
+        #expect(p.handle(0, .bindingDown, at: 0) + p.handle(1, .bindingDown, at: 0) == [.dictation(.start), .upgrade(.fix)])
     }
 
     @Test func tappingBothOpensTheBox() {
         let p = pad()
         _ = p.handle(0, .bindingDown, at: 0)
-        _ = p.handle(1, .bindingDown, at: 0.02)
-        #expect(p.handle(0, .bindingUp, at: 0.15) + p.handle(1, .bindingUp, at: 0.15) == [.fixDiscard, .openBox])
+        _ = p.handle(3, .bindingDown, at: 0.02)
+        #expect(p.handle(0, .bindingUp, at: 0.15) + p.handle(3, .bindingUp, at: 0.15) == [.discard(.rewrite), .openBox(.rewrite)])
         #expect(p.deadline == nil)
     }
 
@@ -99,7 +114,7 @@ import Foundation
         #expect(p.handle(0, .bindingUp, at: 0.25) == [])
     }
 
-    @Test func rightShiftDuringALockedDictationIsIgnored() {
+    @Test func anAddedKeyDuringALockedDictationIsIgnored() {
         let p = pad()
         _ = p.handle(0, .bindingDown, at: 0)
         _ = p.handle(0, .bindingUp, at: 0.1)
@@ -109,12 +124,12 @@ import Foundation
         #expect(p.handle(1, .bindingUp, at: 1.2) == [])
     }
 
-    @Test func aSeparateFixKeyUsesHoldAndTap() {
-        let p = HotkeyPad(fixSharesDictationKey: false)
+    @Test func aSeparateKeyUsesHoldAndTap() {
+        let p = HotkeyPad(extendsDictationKey: [1: false, 3: false])
         #expect(p.handle(1, .bindingDown, at: 0) == [])
-        #expect(p.tick(at: 0.3) == [.fixStart])
-        #expect(p.handle(1, .bindingUp, at: 1) == [.fixFinish])
-        _ = p.handle(1, .bindingDown, at: 2)
-        #expect(p.handle(1, .bindingUp, at: 2.1) == [.openBox])
+        #expect(p.tick(at: 0.3) == [.start(.fix)])
+        #expect(p.handle(1, .bindingUp, at: 1) == [.finish(.fix)])
+        _ = p.handle(3, .bindingDown, at: 2)
+        #expect(p.handle(3, .bindingUp, at: 2.1) == [.openBox(.rewrite)])
     }
 }

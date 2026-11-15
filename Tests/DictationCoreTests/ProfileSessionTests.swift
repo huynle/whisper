@@ -262,7 +262,7 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
     }
 
     private func fix(_ s: DictationSession, number: Int, says: String) async {
-        s.handle(.start, fix: true)
+        s.handle(.start, purpose: .fix)
         s.handle(.finish)
         await transcriber.waitForCalls(number + 1)
         transcriber.answer(number, with: .success(says))
@@ -340,7 +340,7 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
         let s = session(profile(.waitForClean))
         await typeFirst(s, says: "cd to projects", cleaned: "cd to projects")
         s.handle(.start)
-        s.markFix()
+        s.mark(.fix)
         s.handle(.finish)
         await transcriber.waitForCalls(2)
         transcriber.answer(1, with: .success("cd tilde slash projects"))
@@ -349,5 +349,86 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
         await s.settle()
         #expect(field.text == "cd ~/projects")
         #expect(corrections.value.first?.correctedText == "cd ~/projects")
+    }
+
+    // MARK: rewriting the last dictation by an instruction
+
+    private func instruct(_ s: DictationSession, number: Int, says: String) async {
+        s.handle(.start, purpose: .rewrite)
+        s.handle(.finish)
+        await transcriber.waitForCalls(number + 1)
+        transcriber.answer(number, with: .success(says))
+    }
+
+    @Test func aSpokenInstructionRewritesTheLastDictation() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "yo what's up", cleaned: "Yo, what's up?")
+        await instruct(s, number: 1, says: "Make it a little more formal.")
+        let request = RewritePrompt.user(text: "Yo, what's up?", instruction: "Make it a little more formal.")
+        await cleaner.waitFor(request)
+        #expect(cleaner.instructionsSeen.last == RewritePrompt.system(for: profile(.waitForClean)))
+        #expect(field.text == "Yo, what's up?")
+        cleaner.answer(request, with: .success("Hello, how are you doing?"))
+        await s.settle()
+        #expect(field.text == "Hello, how are you doing?")
+        let first = try #require(records.value.first)
+        let rewrite = try #require(records.value.last)
+        #expect(rewrite.instruction == "Make it a little more formal.")
+        #expect(rewrite.fixes == first.id)
+        #expect(rewrite.text == "Hello, how are you doing?")
+        let feedback = try #require(corrections.value.first)
+        #expect(feedback.source == .rewritten)
+        #expect(feedback.instruction == "Make it a little more formal.")
+        #expect(feedback.typedText == "Yo, what's up?")
+        #expect(feedback.correctedText == "Hello, how are you doing?")
+    }
+
+    @Test func instructionsCanBeChained() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "yo what's up", cleaned: "Yo, what's up?")
+        await instruct(s, number: 1, says: "more formal")
+        let first = RewritePrompt.user(text: "Yo, what's up?", instruction: "more formal")
+        await cleaner.waitFor(first)
+        cleaner.answer(first, with: .success("Hello, how are you doing?"))
+        await s.settle()
+        await instruct(s, number: 2, says: "go undercover")
+        let second = RewritePrompt.user(text: "Hello, how are you doing?", instruction: "go undercover")
+        await cleaner.waitFor(second)
+        cleaner.answer(second, with: .success("Hi."))
+        await s.settle()
+        #expect(field.text == "Hi.")
+    }
+
+    @Test func aFailedRewriteLeavesTheTextAndNeverTypesTheInstruction() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "hello", cleaned: "Hello.")
+        await instruct(s, number: 1, says: "more formal")
+        let request = RewritePrompt.user(text: "Hello.", instruction: "more formal")
+        await cleaner.waitFor(request)
+        cleaner.answer(request, with: .failure(TranscriptionError.unreadableAnswer))
+        await s.settle()
+        #expect(field.text == "Hello.")
+        #expect(records.value.last?.outcome == .failed)
+        #expect(records.value.last?.detail?.hasPrefix("Rewrite failed") == true)
+        #expect(corrections.value.isEmpty)
+    }
+
+    @Test func anInstructionWithNothingTypedDoesNothing() async throws {
+        let s = session(profile(.waitForClean))
+        await instruct(s, number: 0, says: "more formal")
+        await s.settle()
+        #expect(field.text == "")
+        #expect(records.value.last?.detail == "Nothing to rewrite: no dictation was typed yet")
+    }
+
+    @Test func aTypedInstructionRewritesTheLastDictation() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "yo", cleaned: "Yo")
+        s.rewriteLast("more formal")
+        let request = RewritePrompt.user(text: "Yo", instruction: "more formal")
+        await cleaner.waitFor(request)
+        cleaner.answer(request, with: .success("Hello."))
+        await s.settle()
+        #expect(field.text == "Hello.")
     }
 }

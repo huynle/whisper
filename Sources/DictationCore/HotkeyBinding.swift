@@ -21,6 +21,8 @@ public struct HotkeyBinding: Codable, Equatable, Sendable {
     public static let rightCommand = HotkeyBinding(keyCode: 54, modifiers: 0)
     /// The fix hotkey's default: the dictation key with Right Shift added.
     public static let rightOptionRightShift = HotkeyBinding(keyCode: 61, modifiers: 0, secondKeyCode: 60)
+    /// The rewrite hotkey's default.
+    public static let rightOptionRightCommand = HotkeyBinding(keyCode: 61, modifiers: 0, secondKeyCode: 54)
 
     /// True when this binding is `other` (a single modifier key) with one more modifier key held.
     public func extends(_ other: HotkeyBinding) -> Bool {

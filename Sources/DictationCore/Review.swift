@@ -17,6 +17,8 @@ public enum ReviewEvidence {
         public var flagged: Bool?
         /// What the user meant.
         public var corrected: String?
+        /// The user asked for it to be rewritten this way ("make it more formal").
+        public var instruction: String?
 
         public init(id: String, profile: String?, app: String?, said: String, typed: String) {
             self.id = id
@@ -43,6 +45,7 @@ public enum ReviewEvidence {
             if let note {
                 item.flagged = true
                 item.corrected = note.correctedText
+                item.instruction = note.instruction
             }
             return item
         }
@@ -228,7 +231,9 @@ public enum ReviewPrompt {
     transcribes it ("said"), a clean-up model rewrites it per profile ("cleaned"), and the result is typed ("typed"). \
     You get the profiles, the dictionary, and dictations where something happened: the clean-up changed the text, \
     the app rejected the clean-up for straying from what was said ("rejected"), or the user flagged it ("flagged") \
-    and maybe wrote what they meant ("corrected").
+    and maybe wrote what they meant ("corrected"), or asked for it to be rewritten ("instruction", with the result \
+    in "corrected"). An instruction the user gives again and again in one profile is a preference worth building \
+    into that profile's instructions or settings.
 
     Suggest a few changes that would make future dictations come out the way the user means them. Each change must \
     rest on the dictations given; cite their ids. Prefer the smallest change: a dictionary entry for a misheard word, \

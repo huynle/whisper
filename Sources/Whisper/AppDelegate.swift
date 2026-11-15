@@ -13,9 +13,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
     private let feedbackLog = DictationLog(fileName: "feedback.jsonl")
     /// The last dictation typed, for "That Was Wrong…".
     private var lastRecord: DictationRecord?
-    private let pad = HotkeyPad(fixSharesDictationKey: false)
-    /// True while a recording started by the fix hotkey runs.
-    private var fixRecording = false
+    private let pad = HotkeyPad(extendsDictationKey: [:])
+    /// What the recording running now was started or turned into, when it acts on the last dictation.
+    private var actingOnLast: DictationPurpose?
     private var correctionBox: CorrectionBox?
     private lazy var autoReviewer = AutoReviewer(settings: settings, store: store)
     private let recorder = MicRecorder()
@@ -67,10 +67,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         ) { [weak self] _ in
             MainActor.assumeIsolated { self?.interfered() }
         }
-        Publishers.CombineLatest3(settings.$binding, settings.$fixBinding, settings.$reviewBinding)
-            .sink { [weak self] dictate, fix, review in
-                self?.listener?.bindings = [dictate, fix, review]
-                self?.pad.fixSharesDictationKey = fix?.extends(dictate) ?? false
+        Publishers.CombineLatest4(settings.$binding, settings.$fixBinding, settings.$reviewBinding, settings.$rewriteBinding)
+            .sink { [weak self] dictate, fix, review, rewrite in
+                self?.listener?.bindings = [dictate, fix, review, rewrite]
+                self?.pad.extendsDictationKey = [1: fix?.extends(dictate) ?? false, 3: rewrite?.extends(dictate) ?? false]
             }.store(in: &subscriptions)
         settings.$capturingShortcut.sink { [weak self] in self?.listener?.paused = $0 }.store(in: &subscriptions)
         settings.$warmSeconds.sink { [weak self] in self?.recorder.warmSeconds = $0 }.store(in: &subscriptions)
@@ -101,13 +101,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     // MARK: hotkey to session
 
-    private var hotkeys: [HotkeyBinding?] { [settings.binding, settings.fixBinding, settings.reviewBinding] }
+    private var hotkeys: [HotkeyBinding?] { [settings.binding, settings.fixBinding, settings.reviewBinding, settings.rewriteBinding] }
 
     private func interfered() {
         session.userInput()
     }
 
-    /// `index`: 0 the dictation hotkey, 1 the fix hotkey, 2 the review hotkey.
+    /// `index`: 0 the dictation hotkey, 1 the fix hotkey, 2 the review hotkey, 3 the rewrite hotkey.
     private func keyMatched(_ index: Int, _ match: KeyMatch, at time: Double) {
         if index == 2 {
             if match == .bindingDown { openReview() }
@@ -124,31 +124,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                 // The microphone first, then the cue, so the cue never delays recording.
                 session.handle(gestureAction)
                 cues.play(Cue.for(gestureAction))
-                if gestureAction == .finish || gestureAction == .cancel { fixRecording = false }
-            case .fixStart:
+                if gestureAction == .finish || gestureAction == .cancel { actingOnLast = nil }
+            case .start(let purpose):
                 guard !session.isRecording, lastRecord != nil else { continue }
-                fixRecording = true
-                session.handle(.start, fix: true)
+                actingOnLast = purpose
+                session.handle(.start, purpose: purpose)
                 cues.play(.microphoneOn)
-            case .fixFromDictation:
-                fixRecording = true
-                session.markFix()
+            case .upgrade(let purpose):
+                actingOnLast = purpose
+                session.mark(purpose)
                 cues.play(.locked)
-            case .fixFinish:
-                guard fixRecording else { continue }
-                fixRecording = false
+            case .finish:
+                guard actingOnLast != nil else { continue }
+                actingOnLast = nil
                 session.handle(.finish)
                 cues.play(.microphoneOff)
-            case .fixCancel:
-                guard fixRecording else { continue }
-                fixRecording = false
+            case .cancel:
+                guard actingOnLast != nil else { continue }
+                actingOnLast = nil
                 session.handle(.cancel)
                 cues.play(.cancelled)
-            case .fixDiscard:
-                fixRecording = false
+            case .discard:
+                actingOnLast = nil
                 session.handle(.cancel)
-            case .openBox:
-                if !session.isRecording { flagLast() }
+            case .openBox(let purpose):
+                guard !session.isRecording else { continue }
+                purpose == .rewrite ? askForInstruction() : flagLast()
             }
         }
         gestureTimer?.invalidate()
@@ -165,7 +166,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     private func recorded(_ record: DictationRecord) {
         log.append(record)
-        if record.outcome == .typed {
+        if record.outcome == .typed, record.fixes != nil, var last = lastRecord {
+            // A fix or rewrite: the same dictation, now reading differently; what was said stays.
+            last.text = record.text
+            lastRecord = last
+            lastText = record.text
+            if settings.learnFromEdits { editWatcher.watch(last) }
+        } else if record.outcome == .typed {
             lastText = record.text
             lastRecord = record
             if settings.learnFromEdits { editWatcher.watch(record) }
@@ -181,7 +188,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         let profile = store.profiles.profile(forApp: app, override: settings.profileOverride)
         return DictationContext(
             profile: profile, dictionary: store.dictionary,
-            cleaner: profile.cleanupModel.map { settings.makeCleaner(model: $0) }, app: app)
+            cleaner: profile.cleanupModel.map { settings.makeCleaner(model: $0) }, app: app,
+            rewriter: settings.makeCleaner(model: profile.cleanupModel ?? Profile.defaultCleanupModel))
     }
 
     // MARK: permissions
@@ -316,6 +324,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
                     self.lastText = corrected
                     self.lastRecord?.text = corrected
                 }
+            }
+        }
+    }
+
+    /// Asks how the last dictation should change, and has it rewritten in place.
+    private func askForInstruction() {
+        guard let record = lastRecord, correctionBox?.isOpen != true else { return }
+        listener?.paused = true
+        correctionBox = CorrectionBox.instruction(for: record) { [weak self] answer in
+            guard let self else { return }
+            self.listener?.paused = self.settings.capturingShortcut
+            self.correctionBox = nil
+            guard let instruction = answer?.trimmingCharacters(in: .whitespacesAndNewlines), !instruction.isEmpty else { return }
+            // The rewrite types once keyboard focus is back in the field.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                self.editWatcher.cancel()
+                self.session.rewriteLast(instruction)
             }
         }
     }

@@ -14,9 +14,20 @@ final class CorrectionBox: NSObject, NSTextViewDelegate, NSWindowDelegate {
         override var canBecomeKey: Bool { true }
     }
 
-    /// Shows the box; `done` gets the corrected text, or nil when cancelled.
+    /// Shows the box to correct `record`; `done` gets the corrected text, or nil when cancelled.
     static func show(for record: DictationRecord, done: @escaping (String?) -> Void) -> CorrectionBox {
-        let box = CorrectionBox(record: record, done: done)
+        show(title: "Fix the last dictation", detail: "You said: \u{201C}\(record.rawText ?? "")\u{201D}", text: record.text ?? "",
+             hint: "Return saves and fixes it in place · Shift-Return new line · Esc cancels", done: done)
+    }
+
+    /// Shows the box to type an instruction for rewriting `record`.
+    static func instruction(for record: DictationRecord, done: @escaping (String?) -> Void) -> CorrectionBox {
+        show(title: "Rewrite the last dictation", detail: "\u{201C}\(record.text ?? "")\u{201D}\nHow should it change?", text: "",
+             hint: "e.g. make it a little more formal · Return rewrites it in place · Esc cancels", done: done)
+    }
+
+    private static func show(title: String, detail: String, text: String, hint: String, done: @escaping (String?) -> Void) -> CorrectionBox {
+        let box = CorrectionBox(title: title, detail: detail, text: text, hint: hint, done: done)
         box.panel.center()
         box.panel.makeKeyAndOrderFront(nil)
         box.panel.makeFirstResponder(box.editor)
@@ -25,12 +36,12 @@ final class CorrectionBox: NSObject, NSTextViewDelegate, NSWindowDelegate {
 
     var isOpen: Bool { done != nil }
 
-    private init(record: DictationRecord, done: @escaping (String?) -> Void) {
+    private init(title: String, detail: String, text: String, hint: String, done: @escaping (String?) -> Void) {
         self.done = done
         panel = Panel(
             contentRect: NSRect(x: 0, y: 0, width: 460, height: 178),
             styleMask: [.titled, .closable, .nonactivatingPanel, .fullSizeContentView], backing: .buffered, defer: false)
-        panel.title = "Fix the last dictation"
+        panel.title = title
         panel.level = .floating
         panel.isFloatingPanel = true
         panel.hidesOnDeactivate = false
@@ -38,7 +49,7 @@ final class CorrectionBox: NSObject, NSTextViewDelegate, NSWindowDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
 
         editor = NSTextView(frame: NSRect(x: 0, y: 0, width: 420, height: 80))
-        editor.string = record.text ?? ""
+        editor.string = text
         editor.font = .systemFont(ofSize: NSFont.systemFontSize + 1)
         editor.isRichText = false
         editor.isAutomaticQuoteSubstitutionEnabled = false
@@ -50,9 +61,9 @@ final class CorrectionBox: NSObject, NSTextViewDelegate, NSWindowDelegate {
         editor.delegate = self
         panel.delegate = self
 
-        let said = NSTextField(wrappingLabelWithString: "You said: \u{201C}\(record.rawText ?? "")\u{201D}")
+        let said = NSTextField(wrappingLabelWithString: detail)
         said.textColor = .secondaryLabelColor
-        let hint = NSTextField(labelWithString: "Return saves and fixes it in place · Shift-Return new line · Esc cancels")
+        let hint = NSTextField(labelWithString: hint)
         hint.font = .systemFont(ofSize: NSFont.smallSystemFontSize)
         hint.textColor = .tertiaryLabelColor
         let scroll = NSScrollView()

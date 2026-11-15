@@ -34,7 +34,7 @@ struct GeneralSettingsView: View {
     @State private var capture = ShortcutCapture()
     @State private var capturing: HotkeyTarget?
 
-    enum HotkeyTarget: String { case dictate, fix, review }
+    enum HotkeyTarget: String { case dictate, fix, rewrite, review }
     @State private var permissions = Permissions.current()
     @State private var openAtLogin = LoginItem.isEnabled
     @State private var loginMessage: String?
@@ -67,6 +67,9 @@ struct GeneralSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
                 hotkeyRow("Fix the last dictation", .fix, settings.fixBinding)
                 Text("Hold and say it again to replace what was typed; tap to type the fix. Either way the correction is kept for the review.")
+                    .font(.caption).foregroundStyle(.secondary)
+                hotkeyRow("Rewrite by instruction", .rewrite, settings.rewriteBinding)
+                Text("Hold and say how to change the last dictation (\u{201C}make it a little more formal\u{201D}); tap to type the instruction. A model rewrites it in place.")
                     .font(.caption).foregroundStyle(.secondary)
                 hotkeyRow("Review dictations", .review, settings.reviewBinding)
                 if let captureMessage {
@@ -186,6 +189,7 @@ struct GeneralSettingsView: View {
         case .dictate: if let binding { settings.binding = binding }
         case .fix: settings.fixBinding = binding
         case .review: settings.reviewBinding = binding
+        case .rewrite: settings.rewriteBinding = binding
         }
     }
 
@@ -193,6 +197,7 @@ struct GeneralSettingsView: View {
     private func clash(_ binding: HotkeyBinding, for target: HotkeyTarget) -> String? {
         let others: [(HotkeyTarget, HotkeyBinding?, String)] = [
             (.dictate, settings.binding, "dictating"), (.fix, settings.fixBinding, "fixing"), (.review, settings.reviewBinding, "reviewing"),
+            (.rewrite, settings.rewriteBinding, "rewriting"),
         ]
         return others.first { $0.0 != target && $0.1 == binding }?.2
     }

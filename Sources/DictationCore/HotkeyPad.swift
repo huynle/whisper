@@ -1,60 +1,80 @@
-/// Combines the dictation hotkey and the fix hotkey into what to do. The fix hotkey is either a key of its own
-/// (hold to say it again, tap to type it, `FixGesture`) or the dictation key with one more modifier, such as
-/// Right Option + Right Shift. In that case the dictation starts the moment Right Option goes down, and adding
-/// Right Shift turns the running recording into a fix, so nothing said is lost; tapping both opens the box.
+/// What a recording is for.
+public enum DictationPurpose: Equatable, Sendable {
+    /// Typed where the cursor is.
+    case dictate
+    /// Said again: replaces the last dictation.
+    case fix
+    /// An instruction ("make it more formal"): a model rewrites the last dictation by it.
+    case rewrite
+}
+
+/// Combines the dictation hotkey with the fix and rewrite hotkeys into what to do. Each of those is either a key
+/// of its own (hold to talk, tap to type, `FixGesture`) or the dictation key with one more modifier, such as
+/// Right Option + Right Shift. Then the dictation starts the moment Right Option goes down, and the added key
+/// turns the running recording into a fix or an instruction, so nothing said is lost; tapping both opens a box.
 public final class HotkeyPad {
     public enum Action: Equatable, Sendable {
         case dictation(GestureAction)
-        /// Start recording a fix (a separate fix key, held).
-        case fixStart
-        /// The dictation recording running now is a fix.
-        case fixFromDictation
-        case fixFinish
-        /// Throw the fix away, with the cancel sound.
-        case fixCancel
+        /// Start recording (a separate key, held).
+        case start(DictationPurpose)
+        /// The dictation recording running now is for this.
+        case upgrade(DictationPurpose)
+        case finish(DictationPurpose)
+        /// Throw the recording away, with the cancel sound.
+        case cancel(DictationPurpose)
         /// Throw the recording away quietly: the press was a tap.
-        case fixDiscard
-        case openBox
+        case discard(DictationPurpose)
+        /// Open the box to type the fix or the instruction.
+        case openBox(DictationPurpose)
     }
 
-    public var fixSharesDictationKey: Bool
-    private let gesture: HotkeyGesture
-    private let fixGesture: FixGesture
-    private let tapMax: Double
-    /// When the current press of the dictation key started.
-    private var pressStart: Double?
-    /// The current press became a fix.
-    private var upgraded = false
+    /// Hotkey positions: 1 fixes, 3 rewrites (2 is the review hotkey, which is not a gesture).
+    public static let purposes: [Int: DictationPurpose] = [1: .fix, 3: .rewrite]
 
-    public init(fixSharesDictationKey: Bool, timings: HotkeyGesture.Timings = .standard) {
-        self.fixSharesDictationKey = fixSharesDictationKey
+    /// By position: whether that hotkey is the dictation key with one more modifier.
+    public var extendsDictationKey: [Int: Bool]
+    private let gesture: HotkeyGesture
+    private var separate: [Int: FixGesture] = [:]
+    private let tapMax: Double
+    private var pressStart: Double?
+    /// The hotkey whose added key turned the current press into a fix or an instruction.
+    private var upgradedBy: Int?
+
+    public init(extendsDictationKey: [Int: Bool], timings: HotkeyGesture.Timings = .standard) {
+        self.extendsDictationKey = extendsDictationKey
         gesture = HotkeyGesture(timings: timings)
-        fixGesture = FixGesture(tapMax: timings.tapMax)
         tapMax = timings.tapMax
+        for index in Self.purposes.keys { separate[index] = FixGesture(tapMax: timings.tapMax) }
     }
 
     public var deadline: Double? {
-        [gesture.deadline, fixGesture.deadline].compactMap { $0 }.min()
+        ([gesture.deadline] + separate.values.map(\.deadline)).compactMap { $0 }.min()
     }
 
     public func tick(at time: Double) -> [Action] {
-        gesture.tick(at: time).map(Action.dictation) + fixGesture.tick(at: time).map(Self.action)
+        var actions = gesture.tick(at: time).map(Action.dictation)
+        for (index, fixGesture) in separate.sorted(by: { $0.key < $1.key }) {
+            actions += fixGesture.tick(at: time).map { Self.action($0, Self.purposes[index]!) }
+        }
+        return actions
     }
 
-    /// `index` 0: the dictation hotkey, 1: the fix hotkey.
+    /// `index` 0: the dictation hotkey; 1: fix; 3: rewrite.
     public func handle(_ index: Int, _ match: KeyMatch, at time: Double) -> [Action] {
-        index == 0 ? dictationKey(match, at: time) : fixKey(match, at: time)
+        guard index != 0 else { return dictationKey(match, at: time) }
+        guard let purpose = Self.purposes[index] else { return [] }
+        return extendsDictationKey[index] == true ? addedKey(index, purpose, match, at: time) : separateKey(index, purpose, match, at: time)
     }
 
     private func dictationKey(_ match: KeyMatch, at time: Double) -> [Action] {
-        if upgraded {
+        if upgradedBy != nil {
             switch match {
             case .bindingUp:
-                // The fix key's release, in the same event, finishes the fix.
+                // The added key's release, in the same event, finishes the press.
                 gesture.abandonPress(keyStillDown: false)
                 return []
             case .otherKey:
-                upgraded = false
+                upgradedBy = nil
                 return gesture.otherKey(at: time).map(Action.dictation)
             case .bindingDown, .ignore:
                 return []
@@ -70,37 +90,41 @@ public final class HotkeyPad {
         }
     }
 
-    private func fixKey(_ match: KeyMatch, at time: Double) -> [Action] {
-        guard fixSharesDictationKey else {
-            switch match {
-            case .bindingDown: return fixGesture.keyDown(at: time).map(Self.action)
-            case .bindingUp: return fixGesture.keyUp(at: time).map(Self.action)
-            case .otherKey: return fixGesture.otherKey(at: time).map(Self.action)
-            case .ignore: return []
-            }
-        }
+    private func addedKey(_ index: Int, _ purpose: DictationPurpose, _ match: KeyMatch, at time: Double) -> [Action] {
         switch match {
         case .bindingDown:
-            guard gesture.isHolding, !upgraded else { return [] }
-            upgraded = true
-            return [.fixFromDictation]
+            guard gesture.isHolding, upgradedBy == nil else { return [] }
+            upgradedBy = index
+            return [.upgrade(purpose)]
         case .bindingUp:
-            guard upgraded else { return [] }
-            upgraded = false
+            guard upgradedBy == index else { return [] }
+            upgradedBy = nil
             if gesture.isHolding { gesture.abandonPress(keyStillDown: true) }
             let tapped = time - (pressStart ?? time) < tapMax
-            return tapped ? [.fixDiscard, .openBox] : [.fixFinish]
+            return tapped ? [.discard(purpose), .openBox(purpose)] : [.finish(purpose)]
         case .otherKey, .ignore:
             return []
         }
     }
 
-    private static func action(_ fix: FixAction) -> Action {
+    private func separateKey(_ index: Int, _ purpose: DictationPurpose, _ match: KeyMatch, at time: Double) -> [Action] {
+        guard let fixGesture = separate[index] else { return [] }
+        let actions: [FixAction]
+        switch match {
+        case .bindingDown: actions = fixGesture.keyDown(at: time)
+        case .bindingUp: actions = fixGesture.keyUp(at: time)
+        case .otherKey: actions = fixGesture.otherKey(at: time)
+        case .ignore: actions = []
+        }
+        return actions.map { Self.action($0, purpose) }
+    }
+
+    private static func action(_ fix: FixAction, _ purpose: DictationPurpose) -> Action {
         switch fix {
-        case .start: .fixStart
-        case .finish: .fixFinish
-        case .cancel: .fixCancel
-        case .openBox: .openBox
+        case .start: .start(purpose)
+        case .finish: .finish(purpose)
+        case .cancel: .cancel(purpose)
+        case .openBox: .openBox(purpose)
         }
     }
 }

@@ -10,6 +10,9 @@ if arguments.count >= 2, arguments[1] == "--bench" {
 if arguments.count >= 2, arguments[1] == "--edit-watch-test" {
     MainActor.assumeIsolated { EditWatcherTest.run() }
 }
+if arguments.count >= 2, arguments[1] == "--rewrite" {
+    exit(RewriteCommand.run(Array(arguments.dropFirst(2))))
+}
 if arguments.count >= 2, arguments[1] == "--review" {
     exit(Reviewer.command(Array(arguments.dropFirst(2))))
 }

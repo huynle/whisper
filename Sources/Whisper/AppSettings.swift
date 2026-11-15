@@ -33,6 +33,8 @@ final class AppSettings: ObservableObject {
     @Published var binding: HotkeyBinding { didSet { save(binding, "binding") } }
     /// Hold to say the last dictation again, tap to type the correction; nil when not set.
     @Published var fixBinding: HotkeyBinding? { didSet { saveOptional(fixBinding, "fixBinding") } }
+    /// Hold to give an instruction that rewrites the last dictation, tap to type one; nil when not set.
+    @Published var rewriteBinding: HotkeyBinding? { didSet { saveOptional(rewriteBinding, "rewriteBinding") } }
     /// Opens Review Dictations; nil (the default) when not set.
     @Published var reviewBinding: HotkeyBinding? { didSet { saveOptional(reviewBinding, "reviewBinding") } }
     /// Review the log in the background and post a notification when there are suggestions.
@@ -63,6 +65,7 @@ final class AppSettings: ObservableObject {
         binding = (defaults.data(forKey: "binding")).flatMap { try? JSONDecoder().decode(HotkeyBinding.self, from: $0) } ?? .rightOption
         fixBinding = Self.optionalBinding(defaults, "fixBinding", default: .rightOptionRightShift)
         reviewBinding = Self.optionalBinding(defaults, "reviewBinding", default: nil)
+        rewriteBinding = Self.optionalBinding(defaults, "rewriteBinding", default: .rightOptionRightCommand)
         autoReview = defaults.object(forKey: "autoReview") as? Bool ?? true
         baseURL = defaults.string(forKey: "baseURL") ?? Self.defaultBaseURL
         model = defaults.string(forKey: "model") ?? Self.defaultModel

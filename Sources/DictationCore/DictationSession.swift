@@ -62,8 +62,10 @@ public struct DictationRecord: Codable, Sendable {
     public var cleanupRejected: String?
     /// The bundle identifier of the app it was dictated into.
     public var app: String?
-    /// A fix: the id of the dictation it replaced.
+    /// A fix or a rewrite: the id of the dictation it replaced.
     public var fixes: String?
+    /// A rewrite: the instruction it followed.
+    public var instruction: String?
 }
 
 /// Runs dictations from hotkey actions: records, drops presses without speech, transcribes, cleans up per the
@@ -87,17 +89,20 @@ public final class DictationSession {
         let id: Int
         let finishedAt: Double
         let context: DictationContext
-        /// Said with the fix hotkey: replaces the last dictation instead of adding to it.
-        var isFix = false
+        var purpose = DictationPurpose.dictate
         var record: DictationRecord
         /// The raw text, or why there is none; nil until the transcript arrives.
         var transcript: Result<String, Error>?
         var transcribedAt: Double?
+        /// The clean-up, or for a rewrite the rewrite.
         var cleanup = CleanupState.none
+        /// A rewrite: the dictation it rewrites (its position in `lastTyped`).
+        var rewriteBase: Int?
 
         /// Ready to type: transcribed, and not waiting for a clean-up the profile waits for.
         var isReady: Bool {
             guard transcript != nil else { return false }
+            if case .running = cleanup, purpose == .rewrite { return false }
             if case .running = cleanup, context.profile.typing == .waitForClean { return false }
             return true
         }
@@ -127,7 +132,7 @@ public final class DictationSession {
     /// The dictation typed last, the only one that can still be corrected in place; `record.text` is what the
     /// field holds now.
     private var lastTyped: (id: Int, typer: LiveTyper, record: DictationRecord, trailingSpace: Bool)?
-    private var recordingIsFix = false
+    private var recordingPurpose = DictationPurpose.dictate
     private var tasks: [Task<Void, Never>] = []
     /// Transcripts received so far, typed or still waiting.
     private(set) var resultsReceived = 0
@@ -142,6 +147,8 @@ public final class DictationSession {
 
     /// The longest a waiting profile waits for clean-up before typing the raw text.
     public var cleanupTimeout: Double = 2.5
+    /// The longest a rewrite may take.
+    public var rewriteTimeout: Double = 8
     /// The longest a raw-then-fix correction may arrive after the raw text.
     public var revisionTimeout: Double = 8
 
@@ -164,12 +171,12 @@ public final class DictationSession {
         self.context = context
     }
 
-    /// `fix`: the recording that starts replaces the last dictation (the fix hotkey) instead of adding to it.
-    public func handle(_ action: GestureAction, fix: Bool = false) {
+    /// `purpose` (when starting): what the recording is for; a fix or an instruction acts on the last dictation.
+    public func handle(_ action: GestureAction, purpose: DictationPurpose = .dictate) {
         switch action {
         case .start:
             guard recordingSince == nil else { return }
-            recordingIsFix = fix
+            recordingPurpose = purpose
             lastFailure = nil
             recordingSince = now()
             recordingContext = context()
@@ -186,14 +193,31 @@ public final class DictationSession {
         case .finish:
             guard let since = recordingSince else { return }
             recordingSince = nil
-            finish(recording: recorder.end(), since: since, context: recordingContext ?? context(), fix: recordingIsFix)
+            finish(recording: recorder.end(), since: since, context: recordingContext ?? context(), purpose: recordingPurpose)
         }
         updateStatus()
     }
 
     /// The recording running now replaces the last dictation instead of adding to it (Right Shift was added).
-    public func markFix() {
-        if recordingSince != nil { recordingIsFix = true }
+    public func mark(_ purpose: DictationPurpose) {
+        if recordingSince != nil { recordingPurpose = purpose }
+    }
+
+    /// Rewrites the last dictation by an instruction the user typed.
+    public func rewriteLast(_ instruction: String) {
+        let context = context()
+        let id = nextID
+        nextID += 1
+        var record = DictationRecord(outcome: .typed, profile: context.profile.name)
+        record.app = context.app
+        record.rawText = instruction
+        let at = now()
+        var pending = Pending(id: id, finishedAt: at, context: context, purpose: .rewrite, record: record)
+        pending.transcript = .success(instruction)
+        pending.transcribedAt = at
+        queue.append(pending)
+        startRewrite(id: id, instruction: instruction)
+        flush()
     }
 
     /// True while a recording is running.
@@ -233,10 +257,10 @@ public final class DictationSession {
 
     // MARK: recording to transcript
 
-    private func finish(recording: Recording, since: Double, context: DictationContext, fix: Bool) {
+    private func finish(recording: Recording, since: Double, context: DictationContext, purpose: DictationPurpose) {
         var context = context
         // A fix replaces text in place, so it is typed once, clean.
-        if fix { context.profile.typing = .waitForClean }
+        if purpose != .dictate { context.profile.typing = .waitForClean }
         let finishedAt = now()
         var record = DictationRecord(
             outcome: .typed,
@@ -260,7 +284,7 @@ public final class DictationSession {
         record.model = engine.model
         let id = nextID
         nextID += 1
-        queue.append(Pending(id: id, finishedAt: finishedAt, context: context, isFix: fix, record: record))
+        queue.append(Pending(id: id, finishedAt: finishedAt, context: context, purpose: purpose, record: record))
 
         tasks.append(Task {
             let result: Result<Transcription, Error>
@@ -283,7 +307,9 @@ public final class DictationSession {
             let raw = context.dictionary.applyAlways(transcription.text, profile: context.profile.name)
             queue[index].record.rawText = raw
             queue[index].transcript = .success(raw)
-            if let cleaner = context.cleaner, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            if queue[index].purpose == .rewrite {
+                startRewrite(id: id, instruction: raw)
+            } else if let cleaner = context.cleaner, !raw.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 queue[index].record.cleanupModel = cleaner.model
                 queue[index].cleanup = .running
                 startCleanup(cleaner, raw: raw, context: context, id: id)
@@ -293,6 +319,27 @@ public final class DictationSession {
     }
 
     // MARK: clean-up
+
+    /// Asks the model to rewrite the last dictation by `instruction`. Without a last dictation or a model the
+    /// rewrite stays undone, and finishing it says why.
+    private func startRewrite(id: Int, instruction: String) {
+        guard let index = queue.firstIndex(where: { $0.id == id }) else { return }
+        let context = queue[index].context
+        queue[index].record.instruction = instruction
+        guard let last = lastTyped, let text = last.record.text, let rewriter = context.rewriter ?? context.cleaner,
+              !instruction.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        else { return }
+        queue[index].rewriteBase = last.id
+        queue[index].record.cleanupModel = rewriter.model
+        queue[index].cleanup = .running
+        let system = RewritePrompt.system(for: context.profile)
+        let request = RewritePrompt.user(text: text, instruction: instruction)
+        let limit = rewriteTimeout
+        tasks.append(Task {
+            let result = await Self.clean(request, with: rewriter, instructions: system, limit: limit)
+            self.cleaned(result, for: id)
+        })
+    }
 
     private func startCleanup(_ cleaner: Cleaner, raw: String, context: DictationContext, id: Int) {
         let instructions = CleanupPrompt.system(for: context.profile, dictionary: context.dictionary)
@@ -426,6 +473,8 @@ public final class DictationSession {
             return
         }
 
+        if pending.purpose == .rewrite { return completeRewrite(pending, start: start) }
+
         var text = raw
         var revisionPending = false
         switch pending.cleanup {
@@ -441,7 +490,7 @@ public final class DictationSession {
             Self.note(error, in: &record)
         }
 
-        if pending.isFix { return completeFix(pending, record: record, text: text, start: start) }
+        if pending.purpose == .fix { return completeFix(pending, record: record, text: text, start: start) }
 
         let trailingSpace = pending.context.profile.trailingSpace
         let typer = LiveTyper(keyboard: keyboard)
@@ -457,6 +506,44 @@ public final class DictationSession {
         } else {
             onRecord(record)
         }
+    }
+
+    /// A rewrite: replaces the last dictation with the model's rewrite, if it is still the last thing typed and
+    /// untouched. A failed rewrite leaves the text alone; the instruction itself is never typed.
+    private func completeRewrite(_ pending: Pending, start: Double) {
+        var record = pending.record
+        func fail(_ message: String) {
+            record.outcome = .failed
+            record.detail = message
+            lastFailure = message
+            onRecord(record)
+        }
+        guard let base = pending.rewriteBase, case .done(let result) = pending.cleanup else {
+            return fail(lastTyped == nil ? "Nothing to rewrite: no dictation was typed yet" : "Nothing to rewrite with: no clean-up model is set")
+        }
+        let rewritten: Transcription
+        switch result {
+        case .failure(let error): return fail("Rewrite failed: " + Self.message(error))
+        case .success(let transcription): rewritten = transcription
+        }
+        guard let last = lastTyped, last.id == base else {
+            return fail("Not rewritten: another dictation was typed meanwhile")
+        }
+        dropRevision(of: last.id, because: "Replaced by a rewrite")
+        record.cleanup = rewritten.timing
+        record.text = rewritten.text
+        record.fixes = last.record.id
+        onCorrection?(Feedback(source: .rewritten, record: last.record, correctedText: rewritten.text, instruction: pending.record.instruction))
+        guard case .typed = last.typer.render(rewritten.text + (last.trailingSpace ? " " : "")) else {
+            return fail("Not replaced: you typed or clicked after it was typed. The rewrite was saved.")
+        }
+        var replaced = last.record
+        replaced.text = rewritten.text
+        lastTyped = (pending.id, last.typer, replaced, last.trailingSpace)
+        let end = now()
+        record.typingSeconds = end - start
+        record.finishToTypedSeconds = end - pending.finishedAt
+        onRecord(record)
     }
 
     /// A fix: replaces the last dictation in place when the field still holds it as typed. Either way the

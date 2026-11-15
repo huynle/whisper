@@ -224,12 +224,15 @@ public struct DictationContext: Sendable {
     public var cleaner: Cleaner?
     /// The bundle identifier of the app in front.
     public var app: String?
+    /// Rewrites the last dictation by an instruction; nil uses `cleaner`.
+    public var rewriter: Cleaner?
 
-    public init(profile: Profile, dictionary: UserDictionary, cleaner: Cleaner?, app: String? = nil) {
+    public init(profile: Profile, dictionary: UserDictionary, cleaner: Cleaner?, app: String? = nil, rewriter: Cleaner? = nil) {
         self.profile = profile
         self.dictionary = dictionary
         self.cleaner = cleaner
         self.app = app
+        self.rewriter = rewriter
     }
 
     /// No profile settings at all: the speech model's text, typed as it is.

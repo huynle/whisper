@@ -4,8 +4,8 @@ import Foundation
 /// dictation log, for the review that proposes dictionary and prompt changes.
 public struct Feedback: Codable, Equatable, Sendable {
     /// `flagged`: typed in the correction box. `edited`: the user's own correction, seen in the field after
-    /// typing. `resaid`: said again with the fix hotkey.
-    public enum Source: String, Codable, Sendable { case flagged, edited, resaid }
+    /// typing. `resaid`: said again with the fix hotkey. `rewritten`: rewritten by a spoken or typed instruction.
+    public enum Source: String, Codable, Sendable { case flagged, edited, resaid, rewritten }
 
     public var id = UUID().uuidString
     public var date = Date()
@@ -19,8 +19,11 @@ public struct Feedback: Codable, Equatable, Sendable {
     public var typedText: String?
     /// What the user meant; nil when they only flagged it.
     public var correctedText: String?
+    /// A rewrite: the user's instruction ("make it more formal").
+    public var instruction: String?
 
-    public init(source: Source, record: DictationRecord, correctedText: String?) {
+    public init(source: Source, record: DictationRecord, correctedText: String?, instruction: String? = nil) {
+        self.instruction = instruction
         self.source = source
         dictationID = record.id
         profile = record.profile
