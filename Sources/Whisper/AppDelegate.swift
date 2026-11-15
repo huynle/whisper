@@ -23,6 +23,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var gestureTimer: Timer?
     private var listenerRetry: Timer?
     private var settingsWindow: NSWindow?
+    private var reviewWindow: NSWindow?
     private var lastText: String?
     private var subscriptions = Set<AnyCancellable>()
 
@@ -79,6 +80,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if CommandLine.arguments.contains("--flag-last") {
             DispatchQueue.main.async { self.flagLast() }
         }
+        // `--open-review [--all]` opens Review Dictations at launch.
+        if CommandLine.arguments.contains("--open-review") { openReview() }
     }
 
     // MARK: hotkey to session
@@ -218,6 +221,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if lastRecord != nil {
             menu.addItem(withTitle: "That Was Wrong…", action: #selector(flagLast), keyEquivalent: "").target = self
         }
+        menu.addItem(withTitle: "Review Dictations…", action: #selector(openReview), keyEquivalent: "").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettingsAction), keyEquivalent: ",").target = self
         menu.addItem(withTitle: "Open Dictation Log", action: #selector(openLog), keyEquivalent: "").target = self
@@ -289,6 +293,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func openSettingsAction() { openSettings() }
+
+    @objc private func openReview() {
+        let model = ReviewModel(settings: settings, store: store)
+        let window = reviewWindow ?? {
+            let window = NSWindow(contentRect: .zero, styleMask: [.titled, .closable], backing: .buffered, defer: false)
+            window.title = "Review Dictations"
+            window.isReleasedWhenClosed = false
+            return window
+        }()
+        window.contentViewController = NSHostingController(rootView: ReviewView(model: model) { [weak window] in window?.close() })
+        reviewWindow = window
+        model.start(all: CommandLine.arguments.contains("--all"))
+        NSApp.activate(ignoringOtherApps: true)
+        window.center()
+        window.makeKeyAndOrderFront(nil)
+    }
 
     private func openSettings(tab: String? = nil) {
         if let tab { settings.settingsTab = tab }

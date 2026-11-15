@@ -5,7 +5,7 @@ import Foundation
 /// Settings kept in UserDefaults; the API key in the Keychain.
 @MainActor
 final class AppSettings: ObservableObject {
-    static let defaultBaseURL = "https://api.ai.huynle.com/v1"
+    nonisolated static let defaultBaseURL = "https://api.ai.huynle.com/v1"
     static let defaultModel = "openrouter/openai/gpt-4o-mini-transcribe"
 
     /// Speech models OmniRoute listed on 2026-11-12; any other model id can be typed in.
@@ -41,6 +41,8 @@ final class AppSettings: ObservableObject {
     @Published var profileOverride: String? { didSet { defaults.set(profileOverride, forKey: "profileOverride") } }
     /// Keeps each recording (for 30 days) next to the detailed timings in the log.
     @Published var developerMode: Bool { didSet { defaults.set(developerMode, forKey: "developerMode") } }
+    /// The model that reviews the log and suggests profile and dictionary changes.
+    @Published var reviewModel: String { didSet { defaults.set(reviewModel, forKey: "reviewModel") } }
     /// The Settings tab shown: "general", "profiles" or "dictionary".
     @Published var settingsTab = "general"
     /// True while Settings is recording a new shortcut, so the hotkey does not fire meanwhile.
@@ -58,6 +60,7 @@ final class AppSettings: ObservableObject {
         warmSeconds = warm < 0 ? .infinity : warm
         cueVolume = defaults.object(forKey: "cueVolume") as? Float ?? 0.15
         developerMode = defaults.bool(forKey: "developerMode")
+        reviewModel = defaults.string(forKey: "reviewModel") ?? Reviewer.defaultModel
         profileOverride = defaults.string(forKey: "profileOverride")
         apiKey = Keychain.read(account: Keychain.omniRoute)
         hasAPIKey = apiKey != nil

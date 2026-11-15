@@ -20,6 +20,14 @@ struct DictationLog {
         return encoder
     }()
 
+    /// Every entry in the file that can be read.
+    func readAll<Entry: Decodable>(_ type: Entry.Type) -> [Entry] {
+        guard let data = try? Data(contentsOf: url) else { return [] }
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return data.split(separator: 0x0A).compactMap { try? decoder.decode(Entry.self, from: Data($0)) }
+    }
+
     /// The last typed dictation in the log, so it can still be flagged after a restart.
     func lastTyped() -> DictationRecord? {
         guard let data = try? Data(contentsOf: url) else { return nil }

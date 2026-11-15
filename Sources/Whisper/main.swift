@@ -7,6 +7,9 @@ let arguments = CommandLine.arguments
 if arguments.count >= 2, arguments[1] == "--bench" {
     exit(Bench.run(Array(arguments.dropFirst(2))))
 }
+if arguments.count >= 2, arguments[1] == "--review" {
+    exit(Reviewer.command(Array(arguments.dropFirst(2))))
+}
 if arguments.count >= 2, arguments[1] == "--store-key" {
     let account = arguments.count >= 3 ? arguments[2] : Keychain.omniRoute
     let key = String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)

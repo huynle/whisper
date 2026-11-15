@@ -12,12 +12,15 @@ public struct OpenAIChatCleaner: Cleaner {
     public let model: String
     private let apiKey: @Sendable () -> String?
     private let transport: HTTPTransport
+    /// The answer's length limit; nil sizes it to the text, for clean-up.
+    public var maxTokens: Int?
 
-    public init(baseURL: URL, model: String, apiKey: @escaping @Sendable () -> String?, transport: HTTPTransport) {
+    public init(baseURL: URL, model: String, apiKey: @escaping @Sendable () -> String?, transport: HTTPTransport, maxTokens: Int? = nil) {
         self.baseURL = baseURL
         self.model = model
         self.apiKey = apiKey
         self.transport = transport
+        self.maxTokens = maxTokens
     }
 
     public func clean(_ text: String, instructions: String) async throws -> Transcription {
@@ -27,7 +30,7 @@ public struct OpenAIChatCleaner: Cleaner {
             "model": model,
             "temperature": 0,
             // Room for the cleaned text, with a margin for symbols and lists, but no room to ramble.
-            "max_tokens": max(64, text.count),
+            "max_tokens": maxTokens ?? max(64, text.count),
             "messages": [
                 ["role": "system", "content": instructions],
                 ["role": "user", "content": text],

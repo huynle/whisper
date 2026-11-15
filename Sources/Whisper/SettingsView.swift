@@ -104,6 +104,12 @@ struct GeneralSettingsView: View {
                     .font(.caption).foregroundStyle(.secondary)
             }
 
+            Section("Learning") {
+                TextField("Review model", text: $settings.reviewModel)
+                Text("Review Dictations… in the menu asks this model to suggest dictionary and profile changes from your recent dictations and corrections. Nothing changes until you tick and save a suggestion.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+
             Section("Developer") {
                 Toggle("Developer mode", isOn: $settings.developerMode)
                 Text("Keeps every recording on this Mac for 30 days, next to the detailed timings in the dictation log, so speed and accuracy can be analysed and models compared.")
