@@ -447,3 +447,10 @@ private final class Once: @unchecked Sendable {
         }
     }
 }
+
+extension DictationRecord {
+    /// A record with only its outcome set, for code outside this module (tests, tools).
+    public init(outcome: Outcome) {
+        self.init(outcome: outcome, detail: nil)
+    }
+}

@@ -43,6 +43,8 @@ final class AppSettings: ObservableObject {
     @Published var developerMode: Bool { didSet { defaults.set(developerMode, forKey: "developerMode") } }
     /// The model that reviews the log and suggests profile and dictionary changes.
     @Published var reviewModel: String { didSet { defaults.set(reviewModel, forKey: "reviewModel") } }
+    /// Watch the field after typing and keep the user's own corrections for the review.
+    @Published var learnFromEdits: Bool { didSet { defaults.set(learnFromEdits, forKey: "learnFromEdits") } }
     /// The Settings tab shown: "general", "profiles" or "dictionary".
     @Published var settingsTab = "general"
     /// True while Settings is recording a new shortcut, so the hotkey does not fire meanwhile.
@@ -61,6 +63,7 @@ final class AppSettings: ObservableObject {
         cueVolume = defaults.object(forKey: "cueVolume") as? Float ?? 0.15
         developerMode = defaults.bool(forKey: "developerMode")
         reviewModel = defaults.string(forKey: "reviewModel") ?? Reviewer.defaultModel
+        learnFromEdits = defaults.object(forKey: "learnFromEdits") as? Bool ?? true
         profileOverride = defaults.string(forKey: "profileOverride")
         apiKey = Keychain.read(account: Keychain.omniRoute)
         hasAPIKey = apiKey != nil

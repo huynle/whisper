@@ -105,6 +105,9 @@ struct GeneralSettingsView: View {
             }
 
             Section("Learning") {
+                Toggle("Learn from my corrections", isOn: $settings.learnFromEdits)
+                Text("For 30 seconds after a dictation, Whisper notices when you fix what it typed, and keeps the fixed text (only that) for the review. Fields that hide their text, like passwords and most terminals, are never read.")
+                    .font(.caption).foregroundStyle(.secondary)
                 TextField("Review model", text: $settings.reviewModel)
                 Text("Review Dictations… in the menu asks this model to suggest dictionary and profile changes from your recent dictations and corrections. Nothing changes until you tick and save a suggestion.")
                     .font(.caption).foregroundStyle(.secondary)

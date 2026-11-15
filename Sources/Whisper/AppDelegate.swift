@@ -24,6 +24,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var listenerRetry: Timer?
     private var settingsWindow: NSWindow?
     private var reviewWindow: NSWindow?
+    private lazy var editWatcher = EditWatcher { [weak self] feedback in self?.feedbackLog.append(feedback) }
     private var lastText: String?
     private var subscriptions = Set<AnyCancellable>()
 
@@ -49,6 +50,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         session.onStatusChange = { [weak self] status in
             self?.show(status)
             if let cue = Cue.for(status) { self?.cues.play(cue) }
+            // A new dictation types into the field, so the watch on the last one ends here.
+            if case .recording = status { self?.editWatcher.finish() }
         }
         show(.idle)
 
@@ -120,6 +123,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if record.outcome == .typed {
             lastText = record.text
             lastRecord = record
+            if settings.learnFromEdits { editWatcher.watch(record) }
         }
     }
 
