@@ -155,7 +155,10 @@ public final class DictationSession {
     public var keyTrace: [String]?
 
     /// The longest a rewrite may take.
-    public var rewriteTimeout: Double = 8
+    public var rewriteTimeout: Double = 20
+    /// When a rewrite has not answered after this long, a second identical request races it (a slow provider
+    /// often answers a fresh request at once); nil sends one request only.
+    public var rewriteHedge: Double?
     /// The longest a raw-then-fix correction may arrive after the raw text.
     public var revisionTimeout: Double = 8
 
@@ -251,7 +254,17 @@ public final class DictationSession {
     }
 
     /// The user typed or clicked: what is in the field is no longer known, so nothing typed so far is corrected.
-    public func userInput() {
+    /// What the user did that makes the field's contents unknown.
+    public enum Interference: String, Sendable {
+        case typed = "you typed"
+        case clicked = "you clicked"
+        case switchedApps = "you switched apps"
+    }
+
+    private var lastInterference = Interference.typed
+
+    public func userInput(_ what: Interference = .typed) {
+        if lastTyped?.typer.isBlocked == false { lastInterference = what }
         lastTyped?.typer.userInterfered()
     }
 
@@ -344,9 +357,9 @@ public final class DictationSession {
         queue[index].cleanup = .running
         let system = RewritePrompt.system(for: context.profile)
         let request = RewritePrompt.user(text: text, instruction: instruction)
-        let limit = rewriteTimeout
+        let limit = rewriteTimeout, hedge = rewriteHedge
         tasks.append(Task {
-            let result = await Self.clean(request, with: rewriter, instructions: system, limit: limit)
+            let result = await Self.clean(request, with: rewriter, instructions: system, limit: limit, hedge: hedge)
             self.cleaned(result, for: id)
         })
     }
@@ -394,14 +407,22 @@ public final class DictationSession {
     /// The clean-up, or a timeout error when it takes longer than `limit` seconds. Two separate tasks race, so a
     /// clean-up that never answers cannot hold the dictation up (a task group would wait for it); a late answer
     /// is ignored.
-    private nonisolated static func clean(_ raw: String, with cleaner: Cleaner, instructions: String, limit: Double) async -> Result<Transcription, Error> {
+    private nonisolated static func clean(_ raw: String, with cleaner: Cleaner, instructions: String, limit: Double, hedge: Double? = nil) async -> Result<Transcription, Error> {
         await withCheckedContinuation { continuation in
             let once = Once()
-            Task {
-                let result: Result<Transcription, Error>
-                do { result = .success(try await cleaner.clean(raw, instructions: instructions)) } catch { result = .failure(error) }
-                if once.claim() { continuation.resume(returning: result) }
+            let attempt = { @Sendable (delay: Double) in
+                Task {
+                    if delay > 0 {
+                        try? await Task.sleep(for: .seconds(delay))
+                        if once.isClaimed { return }
+                    }
+                    let result: Result<Transcription, Error>
+                    do { result = .success(try await cleaner.clean(raw, instructions: instructions)) } catch { result = .failure(error) }
+                    if once.claim() { continuation.resume(returning: result) }
+                }
             }
+            _ = attempt(0)
+            if let hedge { _ = attempt(hedge) }
             Task {
                 try? await Task.sleep(for: .seconds(limit))
                 if once.claim() { continuation.resume(returning: .failure(CleanupTimeout(limit: limit))) }
@@ -439,7 +460,7 @@ public final class DictationSession {
                 lastTyped?.record.text = transcription.text
             } else {
                 record.revised = false
-                record.detail = "Not corrected: you typed or clicked after it was typed"
+                record.detail = "Not corrected: \(lastInterference.rawValue) after it was typed"
             }
         }
         onRecord(record)
@@ -549,7 +570,7 @@ public final class DictationSession {
         record.fixes = last.record.id
         onCorrection?(Feedback(source: .rewritten, record: last.record, correctedText: rewritten.text, instruction: pending.record.instruction))
         guard case .typed = last.typer.render(rewritten.text + (last.trailingSpace ? " " : "")) else {
-            return fail("Not replaced: you typed or clicked after it was typed. The rewrite was saved.")
+            return fail("Not replaced: \(lastInterference.rawValue) after it was typed. The rewrite was saved.")
         }
         var replaced = last.record
         replaced.text = rewritten.text
@@ -584,7 +605,7 @@ public final class DictationSession {
             record.finishToTypedSeconds = end - pending.finishedAt
         } else {
             record.outcome = .failed
-            record.detail = "Not replaced: you typed or clicked after it was typed. The correction was saved."
+            record.detail = "Not replaced: \(lastInterference.rawValue) after it was typed. The correction was saved."
             lastFailure = record.detail
         }
         onRecord(record)
@@ -615,6 +636,8 @@ public final class DictationSession {
 private final class Once: @unchecked Sendable {
     private let lock = NSLock()
     private var claimed = false
+
+    var isClaimed: Bool { lock.withLock { claimed } }
 
     func claim() -> Bool {
         lock.withLock {

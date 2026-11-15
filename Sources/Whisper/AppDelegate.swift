@@ -54,6 +54,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             onRecord: { [weak self] record in self?.recorded(record) },
             context: { [weak self] in self?.dictationContext() ?? .plain })
         session.onCorrection = { [weak self] feedback in self?.saveFeedback(feedback) }
+        session.rewriteHedge = 2.5
         session.onStatusChange = { [weak self] status in
             self?.show(status)
             if let cue = Cue.for(status) { self?.cues.play(cue) }
@@ -62,7 +63,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         }
         show(.idle)
 
-        listener?.onClick = { [weak self] in self?.interfered() }
+        listener?.onClick = { [weak self] in self?.interfered(.clicked) }
         listener?.onModifier = { [weak self] keyCode, flags, time in
             MainActor.assumeIsolated {
                 guard let self, self.settings.developerMode else { return }
@@ -73,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didActivateApplicationNotification, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { self?.interfered() }
+            MainActor.assumeIsolated { self?.interfered(.switchedApps) }
         }
         Publishers.CombineLatest4(settings.$binding, settings.$fixBinding, settings.$reviewBinding, settings.$rewriteBinding)
             .sink { [weak self] dictate, fix, review, rewrite in
@@ -111,8 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
 
     private var hotkeys: [HotkeyBinding?] { [settings.binding, settings.fixBinding, settings.reviewBinding, settings.rewriteBinding] }
 
-    private func interfered() {
-        session.userInput()
+    private func interfered(_ what: DictationSession.Interference) {
+        session.userInput(what)
     }
 
     /// `index`: 0 the dictation hotkey, 1 the fix hotkey, 2 the review hotkey, 3 the rewrite hotkey.
@@ -197,7 +198,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         return DictationContext(
             profile: profile, dictionary: store.dictionary,
             cleaner: profile.cleanupModel.map { settings.makeCleaner(model: $0) }, app: app,
-            rewriter: settings.makeCleaner(model: profile.cleanupModel ?? Profile.defaultCleanupModel))
+            rewriter: settings.makeCleaner(model: settings.rewriteModel.isEmpty ? profile.cleanupModel ?? Profile.defaultCleanupModel : settings.rewriteModel))
     }
 
     // MARK: permissions

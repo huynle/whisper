@@ -49,6 +49,8 @@ final class AppSettings: ObservableObject {
     @Published var profileOverride: String? { didSet { defaults.set(profileOverride, forKey: "profileOverride") } }
     /// Keeps each recording (for 30 days) next to the detailed timings in the log.
     @Published var developerMode: Bool { didSet { defaults.set(developerMode, forKey: "developerMode") } }
+    /// The model that rewrites the last dictation by an instruction; empty uses the profile's clean-up model.
+    @Published var rewriteModel: String { didSet { defaults.set(rewriteModel, forKey: "rewriteModel") } }
     /// The model that reviews the log and suggests profile and dictionary changes.
     @Published var reviewModel: String { didSet { defaults.set(reviewModel, forKey: "reviewModel") } }
     /// Watch the field after typing and keep the user's own corrections for the review.
@@ -75,6 +77,7 @@ final class AppSettings: ObservableObject {
         cueVolume = defaults.object(forKey: "cueVolume") as? Float ?? 0.15
         developerMode = defaults.bool(forKey: "developerMode")
         reviewModel = defaults.string(forKey: "reviewModel") ?? Reviewer.defaultModel
+        rewriteModel = defaults.string(forKey: "rewriteModel") ?? ""
         learnFromEdits = defaults.object(forKey: "learnFromEdits") as? Bool ?? true
         profileOverride = defaults.string(forKey: "profileOverride")
         apiKey = Keychain.read(account: Keychain.omniRoute)

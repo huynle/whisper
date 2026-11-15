@@ -131,7 +131,7 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
         let record = try #require(records.value.first)
         #expect(record.revised == false)
         #expect(record.text == "hello there")
-        #expect(record.detail == "Not corrected: you typed or clicked after it was typed")
+        #expect(record.detail == "Not corrected: you typed after it was typed")
     }
 
     @Test func rawThenFixDoesNotCorrectTextThatALaterDictationFollows() async throws {
@@ -444,5 +444,54 @@ final class ManualCleaner: Cleaner, @unchecked Sendable {
         #expect(field.text == "hello")
         #expect(s.status == .failed("No change: the rewrite came back the same"))
         #expect(corrections.value.isEmpty)
+    }
+
+    @Test func theRecordSaysWhatGotInTheWay() async throws {
+        let s = session(profile(.waitForClean))
+        await typeFirst(s, says: "hello", cleaned: "Hello.")
+        s.userInput(.switchedApps)
+        await instruct(s, number: 1, says: "more formal")
+        let request = RewritePrompt.user(text: "Hello.", instruction: "more formal")
+        await cleaner.waitFor(request)
+        cleaner.answer(request, with: .success("Good day."))
+        await s.settle()
+        #expect(records.value.last?.detail == "Not replaced: you switched apps after it was typed. The rewrite was saved.")
+    }
+}
+
+/// Answers the first request never, every later one at once: a stuck provider.
+final class StuckFirstCleaner: Cleaner, @unchecked Sendable {
+    let model = "stuck-first"
+    private let lock = NSLock()
+    private var count = 0
+    var calls: Int { lock.withLock { count } }
+
+    func clean(_ text: String, instructions: String) async throws -> Transcription {
+        let n = lock.withLock { count += 1; return count }
+        if n == 1 { try await Task.sleep(for: .seconds(30)) }
+        return Transcription(text: "Good day.", timing: RequestTiming(totalMs: 1))
+    }
+}
+
+@MainActor
+@Suite(.timeLimit(.minutes(1))) struct HedgedRewriteTests {
+    @Test func aSecondRequestRescuesAStuckRewrite() async throws {
+        let recorder = FakeRecorder(), transcriber = ManualTranscriber(), field = FakeField()
+        let stuck = StuckFirstCleaner()
+        var p = Profile.fallback
+        p.typing = .waitForClean
+        p.trailingSpace = false
+        p.cleanupModel = nil
+        let context = DictationContext(profile: p, dictionary: UserDictionary(entries: []), cleaner: nil, rewriter: stuck)
+        let s = DictationSession(recorder: recorder, transcriber: { transcriber }, keyboard: field, now: { 0 }, onRecord: { _ in }, context: { context })
+        s.rewriteHedge = 0.05
+        s.handle(.start); s.handle(.finish)
+        await transcriber.waitForCalls(1)
+        transcriber.answer(0, with: .success("hello"))
+        await s.settle()
+        s.rewriteLast("more formal")
+        await s.settle()
+        #expect(field.text == "Good day.")
+        #expect(stuck.calls == 2)
     }
 }

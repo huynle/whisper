@@ -113,7 +113,10 @@ struct GeneralSettingsView: View {
                 Toggle("Learn from my corrections", isOn: $settings.learnFromEdits)
                 Text("For 30 seconds after a dictation, Whisper notices when you fix what it typed, and keeps the fixed text (only that) for the review. Fields that hide their text, like passwords and most terminals, are never read.")
                     .font(.caption).foregroundStyle(.secondary)
-                TextField("Review model", text: $settings.reviewModel)
+                modelPicker("Rewrite model", $settings.rewriteModel, empty: "Same as the profile's clean-up model", choices: knownCleanupModels)
+                Text("Rewrites the last dictation when you give an instruction. Measured fastest: openrouter/openai/gpt-4.1-nano.")
+                    .font(.caption).foregroundStyle(.secondary)
+                modelPicker("Review model", $settings.reviewModel, empty: nil, choices: [Reviewer.defaultModel, "claude/claude-opus-5-5", "claude/claude-haiku-5-5"])
                 Text("Review Dictations… in the menu asks this model to suggest dictionary and profile changes from your recent dictations and corrections. Nothing changes until you tick and save a suggestion.")
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -144,6 +147,17 @@ struct GeneralSettingsView: View {
 
     private var modelChoices: [String] {
         AppSettings.knownModels.contains(settings.model) ? AppSettings.knownModels : [settings.model] + AppSettings.knownModels
+    }
+
+    /// A menu of known models, plus a field for any other model id.
+    @ViewBuilder
+    private func modelPicker(_ title: String, _ value: Binding<String>, empty: String?, choices: [String]) -> some View {
+        let all = (value.wrappedValue.isEmpty || choices.contains(value.wrappedValue) ? [] : [value.wrappedValue]) + choices
+        Picker(title, selection: value) {
+            if let empty { Text(empty).tag("") }
+            ForEach(all, id: \.self) { Text($0).tag($0) }
+        }
+        TextField("\(title) id", text: value, prompt: Text(empty ?? "model id"))
     }
 
     private func permissionRow(_ title: String, _ granted: Bool, _ pane: String) -> some View {

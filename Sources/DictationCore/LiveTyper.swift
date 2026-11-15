@@ -28,6 +28,8 @@ public final class LiveTyper {
     }
 
     /// The user typed, clicked or switched apps: what is in the field is no longer known.
+    public var isBlocked: Bool { blocked }
+
     public func userInterfered() {
         blocked = true
     }
