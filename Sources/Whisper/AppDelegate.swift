@@ -98,12 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         if let flag = CommandLine.arguments.firstIndex(of: "--open-settings") {
             let next = CommandLine.arguments.indices.contains(flag + 1) ? CommandLine.arguments[flag + 1] : "general"
             openSettings(tab: ["general", "profiles", "dictionary"].contains(next) ? next : "general")
-        } else {
-            // Once the Keychain has answered: with no key stored, Settings opens to ask for one.
-            settings.$apiKeyChecked.filter { $0 }.first().sink { [weak self] _ in
-                guard let self, !self.settings.hasAPIKey else { return }
-                self.openSettings()
-            }.store(in: &subscriptions)
+        } else if !settings.hasAPIKey {
+            openSettings()
         }
         // `--flag-last` opens "That Was Wrong…" for the last dictation at launch.
         if CommandLine.arguments.contains("--flag-last") {
@@ -264,7 +260,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
         } else {
             info("Hold \(settings.binding.displayName) to dictate, double-tap to lock")
         }
-        if settings.apiKeyChecked, !settings.hasAPIKey {
+        if !settings.hasAPIKey {
             menu.addItem(withTitle: "Add your API key…", action: #selector(openSettingsAction), keyEquivalent: "").target = self
         }
         if case .failed(let message) = session.status { info("Last dictation failed: \(message)") }

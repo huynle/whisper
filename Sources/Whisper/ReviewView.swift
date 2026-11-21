@@ -36,7 +36,7 @@ final class ReviewModel: ObservableObject {
         let profiles = store.profiles, dictionary = store.dictionary
         Task {
             do {
-                let outcome = try await Reviewer.run(base: base, apiKey: await Task.detached { apiKey.value() }.value, model: model, since: since, profiles: profiles, dictionary: dictionary)
+                let outcome = try await Reviewer.run(base: base, apiKey: apiKey.value(), model: model, since: since, profiles: profiles, dictionary: dictionary)
                 chosen = []
                 state = .ready(outcome)
             } catch {

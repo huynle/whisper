@@ -24,7 +24,7 @@ enum RewriteCommand {
         let profiles = MainActor.assumeIsolated { store.profiles }
         let profile = profiles.profiles.first { $0.name == profileName } ?? .fallback
         let base = UserDefaults.standard.string(forKey: "baseURL") ?? AppSettings.defaultBaseURL
-        let key = Keychain.read(account: Keychain.omniRoute)
+        let key = APIKey.file.read()
         let client = OpenAIChatCleaner(
             baseURL: URL(string: base)!, model: model ?? profile.cleanupModel ?? Profile.defaultCleanupModel,
             apiKey: { key }, transport: URLSessionTransport())

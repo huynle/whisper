@@ -25,6 +25,23 @@ enum LoginItem {
         }
     }
 
+    /// Unregisters and registers the agent again, so it trusts this build's signature.
+    static func reregister() -> String? {
+        // launchd keeps the job, and the old build's launch constraint with it, until it is booted out while
+        // still registered; then it is registered fresh for this build.
+        let bootout = Process()
+        bootout.executableURL = URL(fileURLWithPath: "/bin/launchctl")
+        bootout.arguments = ["bootout", "gui/\(getuid())/\(label)"]
+        bootout.standardError = FileHandle.nullDevice
+        bootout.standardOutput = FileHandle.nullDevice
+        try? bootout.run()
+        bootout.waitUntilExit()
+        Thread.sleep(forTimeInterval: 1)
+        try? agent.unregister()
+        Thread.sleep(forTimeInterval: 0.5)
+        return set(true)
+    }
+
     /// True when the app runs from an Applications folder rather than a build folder.
     static var isInstalled: Bool {
         let path = Bundle.main.bundleURL.deletingLastPathComponent().path

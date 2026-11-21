@@ -59,7 +59,7 @@ enum Reviewer {
             }
         }
         let base = UserDefaults.standard.string(forKey: "baseURL") ?? AppSettings.defaultBaseURL
-        let key = Keychain.read(account: Keychain.omniRoute)
+        let key = APIKey.file.read()
         let store = MainActor.assumeIsolated { ProfileStore() }
         let profiles = MainActor.assumeIsolated { store.profiles }
         let dictionary = MainActor.assumeIsolated { store.dictionary }

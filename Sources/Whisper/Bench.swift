@@ -10,7 +10,7 @@ enum Bench {
         var model = UserDefaults.standard.string(forKey: "model") ?? "openrouter/openai/gpt-4o-mini-transcribe"
         var runs = 1
         var base = UserDefaults.standard.string(forKey: "baseURL") ?? "https://api.ai.huynle.com/v1"
-        var key = Keychain.read(account: Keychain.omniRoute)
+        var key = APIKey.file.read()
         var files: [String] = []
         var profileName: String?
         var rest = arguments[...]

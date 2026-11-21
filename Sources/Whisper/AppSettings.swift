@@ -2,7 +2,7 @@ import Combine
 import DictationCore
 import Foundation
 
-/// Settings kept in UserDefaults; the API key in the Keychain.
+/// Settings kept in UserDefaults; the API key in its own owner-only file (`APIKey`).
 @MainActor
 final class AppSettings: ObservableObject {
     nonisolated static let defaultBaseURL = "https://api.ai.huynle.com/v1"
@@ -59,11 +59,8 @@ final class AppSettings: ObservableObject {
     @Published var settingsTab = "general"
     /// True while Settings is recording a new shortcut, so the hotkey does not fire meanwhile.
     @Published var capturingShortcut = false
-    @Published private(set) var hasAPIKey = false
-    /// False until the Keychain has been read (in the background, see `APIKey`).
-    @Published private(set) var apiKeyChecked = false
-
     let apiKey = APIKey()
+    @Published private(set) var hasAPIKey = false
 
     init() {
         binding = (defaults.data(forKey: "binding")).flatMap { try? JSONDecoder().decode(HotkeyBinding.self, from: $0) } ?? .rightOption
@@ -82,18 +79,13 @@ final class AppSettings: ObservableObject {
         rewriteModel = defaults.string(forKey: "rewriteModel") ?? ""
         learnFromEdits = defaults.object(forKey: "learnFromEdits") as? Bool ?? true
         profileOverride = defaults.string(forKey: "profileOverride")
-        apiKey.load(account: Keychain.omniRoute) { [weak self] key in
-            self?.hasAPIKey = key != nil
-            self?.apiKeyChecked = true
-        }
+        hasAPIKey = apiKey.value() != nil
     }
 
     func setAPIKey(_ key: String) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
-        try Keychain.write(trimmed, account: Keychain.omniRoute)
-        apiKey.set(trimmed)
-        hasAPIKey = true
-        apiKeyChecked = true
+        try apiKey.save(trimmed)
+        hasAPIKey = apiKey.value() != nil
     }
 
     /// The transcriber for the next dictation, from the settings as they are now.

@@ -17,6 +17,14 @@ fi
 rm -rf "$DEST"
 ditto build/Whisper.app "$DEST"
 codesign --verify --strict "$DEST"
-# Through the agent when it is registered, so a crash later is restarted; otherwise as a normal app.
-launchctl kickstart "gui/$(id -u)/com.huynle.whisper.agent" 2>/dev/null || open "$DEST"
+# macOS ties the launch agent to the build it was registered with, and takes a moment to accept a new
+# self-signed build, so register it for this one until Whisper is running through it (a crash later is then
+# restarted). Without the agent, open it as a normal app.
+started=no
+for _ in 1 2 3; do
+    "$DEST/Contents/MacOS/Whisper" --register-agent >/dev/null 2>&1 || break
+    for _ in $(seq 1 16); do pgrep -x Whisper >/dev/null && { started=yes; break; }; sleep 0.5; done
+    [ $started = yes ] && break
+done
+[ $started = yes ] || open "$DEST"
 echo "Installed and started $DEST"

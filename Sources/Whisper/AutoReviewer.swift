@@ -54,7 +54,7 @@ final class AutoReviewer {
         Task {
             defer { running = false }
             guard let outcome = try? await Reviewer.run(
-                base: base, apiKey: await Task.detached { apiKey.value() }.value, model: model, since: lastReview, profiles: profiles, dictionary: dictionary)
+                base: base, apiKey: apiKey.value(), model: model, since: lastReview, profiles: profiles, dictionary: dictionary)
             else { return }
             if outcome.proposals.isEmpty {
                 // Nothing to change: the next review starts from here.

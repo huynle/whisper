@@ -29,6 +29,7 @@ struct GeneralSettingsView: View {
     @ObservedObject var settings: AppSettings
     @State private var keyDraft = ""
     @State private var keyMessage: String?
+    @State private var showKey = false
     @State private var captureMessage: String?
     @State private var monitor: Any?
     @State private var capture = ShortcutCapture()
@@ -85,12 +86,24 @@ struct GeneralSettingsView: View {
                 TextField("Model id", text: $settings.model)
                 TextField("Language (empty: detect)", text: $settings.language)
                 HStack {
-                    SecureField(settings.hasAPIKey ? "API key stored; type to replace" : "API key", text: $keyDraft)
-                    Button("Save key") { saveKey() }.disabled(keyDraft.isEmpty)
+                    Group {
+                        if showKey { TextField("API key", text: $keyDraft) } else { SecureField("API key", text: $keyDraft) }
+                    }
+                    .onAppear { keyDraft = settings.apiKey.value() ?? "" }
+                    Button { showKey.toggle() } label: { Image(systemName: showKey ? "eye.slash" : "eye") }
+                        .buttonStyle(.borderless)
+                        .help(showKey ? "Hide the key" : "Show the key")
+                    Button("Save") { saveKey() }
+                        .disabled(keyDraft.trimmingCharacters(in: .whitespacesAndNewlines) == (settings.apiKey.value() ?? ""))
+                    if settings.hasAPIKey {
+                        Button("Remove") {
+                            keyDraft = ""
+                            saveKey()
+                        }
+                    }
                 }
-                if let keyMessage {
-                    Text(keyMessage).font(.caption).foregroundStyle(.secondary)
-                }
+                Text(keyMessage ?? "Saved on this Mac in ~/Library/Application Support/Whisper/api-key, readable only by your account.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
 
             Section("Microphone") {
@@ -175,8 +188,8 @@ struct GeneralSettingsView: View {
     private func saveKey() {
         do {
             try settings.setAPIKey(keyDraft)
-            keyDraft = ""
-            keyMessage = "Key stored in the Keychain."
+            keyDraft = settings.apiKey.value() ?? ""
+            keyMessage = settings.hasAPIKey ? "Key saved. It is used from the next dictation." : "Key removed."
         } catch {
             keyMessage = "Could not store the key: \(error)"
         }
