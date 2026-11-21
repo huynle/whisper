@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.huynle.whisper.agent</string>
+    <key>BundleProgram</key>
+    <string>Contents/MacOS/Whisper</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array>
+        <string>com.huynle.whisper</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Started again when it ends any other way than Quit (a crash); Quit exits 0 and stays quit. -->
+    <key>KeepAlive</key>
+    <dict>
+        <key>SuccessfulExit</key>
+        <false/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>5</integer>
+    <key>ProcessType</key>
+    <string>Interactive</string>
+    <key>LimitLoadToSessionType</key>
+    <string>Aqua</string>
+</dict>
+</plist>

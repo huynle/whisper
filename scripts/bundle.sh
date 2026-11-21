@@ -20,6 +20,8 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 cp "$BIN" "$APP/Contents/MacOS/Whisper"
 cp App/Info.plist "$APP/Contents/Info.plist"
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+cp App/LaunchAgents/com.huynle.whisper.agent.plist "$APP/Contents/Library/LaunchAgents/"
 
 codesign --force --sign "$IDENTITY" --identifier com.huynle.whisper "$APP"
 codesign --verify --strict "$APP"

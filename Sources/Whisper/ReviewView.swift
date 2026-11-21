@@ -32,11 +32,11 @@ final class ReviewModel: ObservableObject {
         state = .running
         let since = all ? nil : UserDefaults.standard.object(forKey: Reviewer.lastReviewKey) as? Date
         let base = settings.baseURL, model = settings.reviewModel
-        let key = Keychain.read(account: Keychain.omniRoute)
+        let apiKey = settings.apiKey
         let profiles = store.profiles, dictionary = store.dictionary
         Task {
             do {
-                let outcome = try await Reviewer.run(base: base, apiKey: key, model: model, since: since, profiles: profiles, dictionary: dictionary)
+                let outcome = try await Reviewer.run(base: base, apiKey: await Task.detached { apiKey.value() }.value, model: model, since: since, profiles: profiles, dictionary: dictionary)
                 chosen = []
                 state = .ready(outcome)
             } catch {

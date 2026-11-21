@@ -49,12 +49,12 @@ final class AutoReviewer {
         running = true
         defaults.set(Date(), forKey: Self.lastAttemptKey)
         let base = settings.baseURL, model = settings.reviewModel
-        let key = Keychain.read(account: Keychain.omniRoute)
+        let apiKey = settings.apiKey
         let profiles = store.profiles, dictionary = store.dictionary
         Task {
             defer { running = false }
             guard let outcome = try? await Reviewer.run(
-                base: base, apiKey: key, model: model, since: lastReview, profiles: profiles, dictionary: dictionary)
+                base: base, apiKey: await Task.detached { apiKey.value() }.value, model: model, since: lastReview, profiles: profiles, dictionary: dictionary)
             else { return }
             if outcome.proposals.isEmpty {
                 // Nothing to change: the next review starts from here.

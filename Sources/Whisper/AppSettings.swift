@@ -59,9 +59,11 @@ final class AppSettings: ObservableObject {
     @Published var settingsTab = "general"
     /// True while Settings is recording a new shortcut, so the hotkey does not fire meanwhile.
     @Published var capturingShortcut = false
-    @Published private(set) var hasAPIKey: Bool
+    @Published private(set) var hasAPIKey = false
+    /// False until the Keychain has been read (in the background, see `APIKey`).
+    @Published private(set) var apiKeyChecked = false
 
-    private var apiKey: String?
+    let apiKey = APIKey()
 
     init() {
         binding = (defaults.data(forKey: "binding")).flatMap { try? JSONDecoder().decode(HotkeyBinding.self, from: $0) } ?? .rightOption
@@ -80,15 +82,18 @@ final class AppSettings: ObservableObject {
         rewriteModel = defaults.string(forKey: "rewriteModel") ?? ""
         learnFromEdits = defaults.object(forKey: "learnFromEdits") as? Bool ?? true
         profileOverride = defaults.string(forKey: "profileOverride")
-        apiKey = Keychain.read(account: Keychain.omniRoute)
-        hasAPIKey = apiKey != nil
+        apiKey.load(account: Keychain.omniRoute) { [weak self] key in
+            self?.hasAPIKey = key != nil
+            self?.apiKeyChecked = true
+        }
     }
 
     func setAPIKey(_ key: String) throws {
         let trimmed = key.trimmingCharacters(in: .whitespacesAndNewlines)
         try Keychain.write(trimmed, account: Keychain.omniRoute)
-        apiKey = trimmed
+        apiKey.set(trimmed)
         hasAPIKey = true
+        apiKeyChecked = true
     }
 
     /// The transcriber for the next dictation, from the settings as they are now.
@@ -98,14 +103,14 @@ final class AppSettings: ObservableObject {
             baseURL: URL(string: baseURL) ?? URL(string: Self.defaultBaseURL)!,
             model: model,
             language: language.isEmpty ? nil : language,
-            apiKey: { key },
+            apiKey: { key.value() },
             transport: transport)
     }
 
     /// The clean-up engine for `model`, through the same provider and connection as transcription.
     func makeCleaner(model: String) -> Cleaner {
         let key = apiKey
-        return OpenAIChatCleaner(baseURL: URL(string: baseURL) ?? URL(string: Self.defaultBaseURL)!, model: model, apiKey: { key }, transport: transport)
+        return OpenAIChatCleaner(baseURL: URL(string: baseURL) ?? URL(string: Self.defaultBaseURL)!, model: model, apiKey: { key.value() }, transport: transport)
     }
 
     /// Stored as empty data once the user clears it, so the default does not come back.

@@ -8,12 +8,15 @@ cd "$(dirname "$0")/.."
 
 DEST="$HOME/Applications/Whisper.app"
 mkdir -p "$HOME/Applications"
+# Quit, not kill: the launch agent restarts Whisper when it ends any other way.
 if pgrep -x Whisper >/dev/null; then
-    pkill -x Whisper
-    while pgrep -x Whisper >/dev/null; do sleep 0.2; done
+    osascript -e 'tell application id "com.huynle.whisper" to quit' >/dev/null 2>&1 || true
+    for _ in $(seq 1 50); do pgrep -x Whisper >/dev/null || break; sleep 0.2; done
+    pgrep -x Whisper >/dev/null && { echo "Whisper did not quit; quit it from its menu and run this again." >&2; exit 1; }
 fi
 rm -rf "$DEST"
 ditto build/Whisper.app "$DEST"
 codesign --verify --strict "$DEST"
-open "$DEST"
+# Through the agent when it is registered, so a crash later is restarted; otherwise as a normal app.
+launchctl kickstart "gui/$(id -u)/com.huynle.whisper.agent" 2>/dev/null || open "$DEST"
 echo "Installed and started $DEST"
