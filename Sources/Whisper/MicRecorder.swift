@@ -12,7 +12,10 @@ final class MicRecorder: AudioRecorder {
     /// Seconds the microphone stays on after a dictation: 0 stops it at once, infinity never.
     var warmSeconds: Double = 60
 
-    private let engine = AVAudioEngine()
+    /// Replaced on every cold start: an engine keeps the format of the microphone it first saw, and installing a
+    /// tap with a stale format after a device change raises an exception that ends the app.
+    private var engine = AVAudioEngine()
+    private var configObserver: NSObjectProtocol?
     private let target = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: Double(sampleRate), channels: 1, interleaved: false)!
     private var converter: AVAudioConverter?
     private var stopTimer: Timer?
@@ -27,9 +30,12 @@ final class MicRecorder: AudioRecorder {
 
     private(set) var lastError: String?
 
-    init() {
-        NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
-            // A microphone was plugged in or removed: start again with the new format on the next press.
+    init() {}
+
+    private func observe(_ engine: AVAudioEngine) {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = NotificationCenter.default.addObserver(forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main) { [weak self] _ in
+            // A microphone was plugged in, removed or switched: start a new engine on the next press.
             self?.stopEngine()
         }
     }
@@ -69,9 +75,16 @@ final class MicRecorder: AudioRecorder {
     }
 
     private func startEngine() {
+        engine.inputNode.removeTap(onBus: 0)
+        engine.stop()
+        engine = AVAudioEngine()
+        observe(engine)
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        guard format.sampleRate > 0, let converter = AVAudioConverter(from: format, to: target) else {
+        let hardware = input.inputFormat(forBus: 0)
+        guard format.sampleRate > 0, format.channelCount > 0,
+              hardware.sampleRate == format.sampleRate, hardware.channelCount == format.channelCount,
+              let converter = AVAudioConverter(from: format, to: target) else {
             lastError = "No microphone input is available"
             return
         }
