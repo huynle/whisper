@@ -56,6 +56,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             context: { [weak self] in self?.dictationContext() ?? .plain })
         session.onCorrection = { [weak self] feedback in self?.saveFeedback(feedback) }
         session.rewriteHedge = 2.5
+        session.transcribeHedge = 1.2
         session.onStatusChange = { [weak self] status in
             self?.show(status)
             if let cue = Cue.for(status) { self?.cues.play(cue) }
@@ -133,12 +134,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, UNUser
             case .dictation(let gestureAction):
                 // The microphone first, then the cue, so the cue never delays recording.
                 session.handle(gestureAction)
+                if gestureAction == .start { settings.warmConnection() }
                 cues.play(Cue.for(gestureAction))
                 if gestureAction == .finish || gestureAction == .cancel { actingOnLast = nil }
             case .start(let purpose):
                 guard !session.isRecording, lastRecord != nil else { continue }
                 actingOnLast = purpose
                 session.handle(.start, purpose: purpose)
+                settings.warmConnection()
                 cues.play(.microphoneOn)
             case .upgrade(let purpose):
                 actingOnLast = purpose

@@ -154,6 +154,10 @@ public final class DictationSession {
     /// Developer mode: the keys of the current press, copied into the record when it finishes or is cancelled.
     public var keyTrace: [String]?
 
+    /// When a transcription has not answered after this long, a second identical request races it; nil sends
+    /// one request only.
+    public var transcribeHedge: Double?
+
     /// The longest a rewrite may take.
     public var rewriteTimeout: Double = 20
     /// When a rewrite has not answered after this long, a second identical request races it (a slow provider
@@ -309,9 +313,9 @@ public final class DictationSession {
         nextID += 1
         queue.append(Pending(id: id, finishedAt: finishedAt, context: context, purpose: purpose, record: record))
 
+        let hedge = transcribeHedge
         tasks.append(Task {
-            let result: Result<Transcription, Error>
-            do { result = .success(try await engine.transcribe(wav: wav)) } catch { result = .failure(error) }
+            let result = await Self.transcribe(wav, with: engine, hedge: hedge)
             self.transcribed(result, for: id)
         })
     }
@@ -407,6 +411,30 @@ public final class DictationSession {
     /// The clean-up, or a timeout error when it takes longer than `limit` seconds. Two separate tasks race, so a
     /// clean-up that never answers cannot hold the dictation up (a task group would wait for it); a late answer
     /// is ignored.
+    /// The first answer of one request, or of two when the first has not answered within `hedge` seconds. A
+    /// failure of one request waits for the other, if it is running.
+    private nonisolated static func transcribe(_ wav: Data, with engine: Transcriber, hedge: Double?) async -> Result<Transcription, Error> {
+        await withCheckedContinuation { continuation in
+            let once = Once()
+            let pending = Counter(hedge == nil ? 1 : 2)
+            let attempt = { @Sendable (delay: Double) in
+                Task {
+                    if delay > 0 {
+                        try? await Task.sleep(for: .seconds(delay))
+                        if once.isClaimed { return }
+                    }
+                    let result: Result<Transcription, Error>
+                    do { result = .success(try await engine.transcribe(wav: wav)) } catch { result = .failure(error) }
+                    let last = pending.decrement() == 0
+                    if case .failure = result, !last { return }
+                    if once.claim() { continuation.resume(returning: result) }
+                }
+            }
+            _ = attempt(0)
+            if let hedge { _ = attempt(hedge) }
+        }
+    }
+
     private nonisolated static func clean(_ raw: String, with cleaner: Cleaner, instructions: String, limit: Double, hedge: Double? = nil) async -> Result<Transcription, Error> {
         await withCheckedContinuation { continuation in
             let once = Once()
@@ -652,4 +680,12 @@ extension DictationRecord {
     public init(outcome: Outcome) {
         self.init(outcome: outcome, detail: nil)
     }
+}
+
+/// Counts down from a start value, safely across threads.
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Int
+    init(_ value: Int) { self.value = value }
+    func decrement() -> Int { lock.withLock { value -= 1; return value } }
 }

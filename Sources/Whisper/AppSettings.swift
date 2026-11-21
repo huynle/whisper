@@ -6,16 +6,17 @@ import Foundation
 @MainActor
 final class AppSettings: ObservableObject {
     nonisolated static let defaultBaseURL = "https://api.ai.huynle.com/v1"
-    static let defaultModel = "openrouter/openai/gpt-4o-mini-transcribe"
+    /// Fastest and steadiest in the 2026-11-21 measurement (Brain 8zw561m7): 0.3–0.8 s through OmniRoute.
+    static let defaultModel = "openrouter/deepgram/nova-3"
 
     /// Speech models OmniRoute listed on 2026-11-12; any other model id can be typed in.
     static let knownModels = [
+        "openrouter/deepgram/nova-3",
+        "openrouter/mistralai/voxtral-mini-transcribe",
         "openrouter/openai/gpt-4o-mini-transcribe",
         "openrouter/openai/gpt-4o-transcribe",
         "openrouter/openai/whisper-large-v3-turbo",
         "openrouter/openai/whisper-large-v3",
-        "openrouter/deepgram/nova-3",
-        "openrouter/mistralai/voxtral-mini-transcribe",
         "openrouter/nvidia/parakeet-tdt-0.6b-v3",
     ]
 
@@ -103,6 +104,21 @@ final class AppSettings: ObservableObject {
     func makeCleaner(model: String) -> Cleaner {
         let key = apiKey
         return OpenAIChatCleaner(baseURL: URL(string: baseURL) ?? URL(string: Self.defaultBaseURL)!, model: model, apiKey: { key.value() }, transport: transport)
+    }
+
+    private var lastWarmUp: Date?
+
+    /// Opens (or keeps open) the connection to the provider while the user is still talking, so the
+    /// transcription request does not pay for connecting. At most once every 15 s; the answer is ignored.
+    func warmConnection() {
+        if let lastWarmUp, Date().timeIntervalSince(lastWarmUp) < 15 { return }
+        lastWarmUp = Date()
+        guard let url = URL(string: baseURL)?.appendingPathComponent("models") else { return }
+        var request = URLRequest(url: url, timeoutInterval: 10)
+        request.httpMethod = "HEAD"
+        if let key = apiKey.value() { request.setValue("Bearer \(key)", forHTTPHeaderField: "Authorization") }
+        let transport = transport
+        Task.detached { _ = try? await transport.send(request) }
     }
 
     /// Stored as empty data once the user clears it, so the default does not come back.
